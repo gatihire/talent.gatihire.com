@@ -1,6 +1,8 @@
 FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev
+# Install with dev deps so we can run TS directly with tsx
+RUN npm ci
 COPY . .
-CMD ["node", "workers/resume-queue-worker.js"]
+# Run the TypeScript worker via tsx runtime
+CMD ["npx", "tsx", "workers/resume-queue-worker.ts"]

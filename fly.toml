@@ -12,13 +12,4 @@ primary_region = "bom"
   auto_stop_machines = false   # always on
   auto_start_machines = true
 
-[[services]]
-  internal_port = 8080
-  protocol = "tcp"
-  [[services.ports]]
-    port = 443
-    handlers = ["tls", "http"]
-  [[services.tcp_checks]]
-    interval = "15s"
-    timeout = "2s"
-    grace_period = "5s"
+# No http service required; this is a background worker
