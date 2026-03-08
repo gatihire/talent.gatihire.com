@@ -31,13 +31,12 @@ export async function GET(request: NextRequest) {
         .select("id,file_url,total_experience,name,status")
         .eq("auth_user_id", userId)
         .maybeSingle()
-      const isNew =
-        !c ||
-        !c.file_url ||
-        !c.total_experience ||
-        !c.name ||
-        String(c.status || "").trim().toLowerCase() === "new"
-      if (isNew) dest = "/onboarding"
+      const isTrulyNew = !c?.id
+      if (isTrulyNew) {
+        dest = "/onboarding"
+      } else if (dest === "/onboarding") {
+        dest = "/dashboard/jobs"
+      }
     }
   } catch {
   }
