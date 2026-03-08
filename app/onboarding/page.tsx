@@ -1,16 +1,16 @@
 "use client"
 
 import Link from "next/link"
+import { Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import { ApplyStepper } from "@/components/ApplyStepper"
 import { ThemeToggle } from "@/components/theme/ThemeToggle"
 
 export const runtime = "nodejs"
 
-export default function OnboardingPage() {
+function OnboardingInner() {
   const sp = useSearchParams()
   const returnTo = (sp.get("returnTo") || "/dashboard/jobs").trim() || "/dashboard/jobs"
-
   return (
     <div className="min-h-screen bg-app">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur">
@@ -24,7 +24,6 @@ export default function OnboardingPage() {
           </div>
         </div>
       </header>
-
       <main className="mx-auto w-full max-w-3xl px-4 py-10">
         <div className="rounded-3xl border bg-card p-8">
           <div className="text-2xl font-semibold">Create your profile</div>
@@ -40,3 +39,10 @@ export default function OnboardingPage() {
   )
 }
 
+export default function OnboardingPage() {
+  return (
+    <Suspense>
+      <OnboardingInner />
+    </Suspense>
+  )
+}
