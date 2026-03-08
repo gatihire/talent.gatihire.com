@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   const query = supabaseAdmin
     .from("job_invites")
-    .select("id, job_id, email, token, status, sent_at, opened_at, responded_at, applied_at, rejected_at, created_at, jobs(id,title,location,industry,sub_category,employment_type)")
+    .select("id, job_id, email, token, status, sent_at, opened_at, responded_at, applied_at, rejected_at, created_at, jobs(id,title,client_name,location,industry,sub_category,employment_type)")
     .order("created_at", { ascending: false })
 
   const { data: invites, error: iErr } = candidateId

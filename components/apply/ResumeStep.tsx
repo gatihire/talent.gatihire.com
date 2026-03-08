@@ -13,6 +13,7 @@ export function ResumeStep({
   parsingJob,
   onError,
   onUploadAndParse,
+  onParseExisting,
   onSkip
 }: {
   candidate: Candidate | null
@@ -21,6 +22,7 @@ export function ResumeStep({
   parsingJob: ParsingJob | null
   onError: (msg: string | null) => void
   onUploadAndParse: (file: File) => Promise<void>
+  onParseExisting: () => Promise<void>
   onSkip: () => void
 }) {
   const needsResume = !candidate?.file_url
@@ -64,17 +66,26 @@ export function ResumeStep({
                 const f = e.target.files?.[0] || null
                 if (!f) return
                 onError(null)
-                await onUploadAndParse(f)
+                try {
+                  await onUploadAndParse(f)
+                } finally {
+                  e.target.value = ""
+                }
               }}
               className="sr-only"
             />
           </label>
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 sticky bottom-0 bg-card pt-2 mt-auto sm:relative sm:pt-0 sm:mt-0">
             {!needsResume ? (
-              <Button variant="secondary" onClick={onSkip} disabled={busy} className="flex-1 rounded-xl">
-                Skip
-              </Button>
+              <>
+                <Button variant="secondary" onClick={onParseExisting} disabled={busy} className="flex-1 h-12 rounded-xl">
+                  Parse existing
+                </Button>
+                <Button variant="secondary" onClick={onSkip} disabled={busy} className="flex-1 h-12 rounded-xl">
+                  Skip
+                </Button>
+              </>
             ) : null}
           </div>
 

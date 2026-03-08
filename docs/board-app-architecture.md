@@ -1,4 +1,4 @@
-# Truckinzy Board App – Architecture & Feature Guide
+# GatiHire Board App Architecture & Feature Guide
 
 This document explains the **candidate-facing board app** (Next.js 14) – how authentication works, how resumes and profiles are managed, how applications and invites flow, and how it connects back to the internal admin app and Supabase.
 

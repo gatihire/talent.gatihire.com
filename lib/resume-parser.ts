@@ -10,7 +10,7 @@ const openRouterApiKey = process.env.OPENROUTER_API_KEY || ""
 
 export async function parseResume(file: any): Promise<ComprehensiveCandidateData> {
   try {
-    console.log(`=== Starting Resume Parsing for ${file.name} ===`)
+    console.log("=== Starting Resume Parsing ===")
     
     // First try OpenRouter parsing for docx files
     if (file.name.toLowerCase().endsWith('.docx')) {
@@ -187,7 +187,6 @@ async function parseResumeWithGemini(file: File): Promise<ComprehensiveCandidate
     console.log("🔄 Starting Gemini parsing...")
     const text = await extractTextFromFile(file)
     console.log(`📄 Extracted text length: ${text.length} characters`)
-    console.log(`📄 First 200 characters: ${text.substring(0, 200)}...`)
 
     // Limit text to avoid token limits but provide enough context
     const limitedText = text.substring(0, 5000)
@@ -272,7 +271,7 @@ ${limitedText}
 Return ONLY the JSON object:`
 
     // Try different Gemini models with fallback (prioritize 2.0-flash which is available)
-    const models = [process.env.GEMINI_MODEL || "gemini-2.0-flash", "gemini-2.5-flash"]
+    const models = [process.env.GEMINI_MODEL || "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]
     let lastError = null
 
     for (const modelName of models) {
@@ -538,9 +537,13 @@ Return ONLY the JSON object:`
         
         return candidateData
 
-      } catch (error) {
-        console.log(`⚠️ Gemini model ${modelName} failed:`, error)
+      } catch (error: any) {
+        console.log(`⚠️ Gemini model ${modelName} failed:`, error.message || error)
         lastError = error
+        if (String(error.message).includes("429")) {
+          console.log("Gemini rate limit hit, waiting before retry...")
+          await new Promise(r => setTimeout(r, 1500))
+        }
         continue
       }
     }
@@ -2120,17 +2123,124 @@ async function extractDocText(arrayBuffer: ArrayBuffer): Promise<string> {
 
 async function extractPDFText(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
-    // Use pdf-parse for robust PDF text extraction
     const data = await pdfParse(Buffer.from(arrayBuffer))
-    return sanitizeExtractedText(data.text)
+    const text = sanitizeExtractedText(data.text)
+    if (text && text.length >= 80 && !looksLikePdfStructure(text)) {
+      return text
+    }
+
+    if (genAI) {
+      try {
+        const ocrText = await extractPDFTextWithGemini(arrayBuffer)
+        const out = sanitizeExtractedText(ocrText)
+        const base = looksLikePdfStructure(text) ? "" : text
+        return out.length > base.length ? out : base
+      } catch (e) {
+        const status = getGeminiErrorStatus(e as any)
+        const msg = String((e as any)?.message || e)
+        console.warn(`⚠️ Gemini PDF OCR failed (${status || "unknown"}): ${msg}`)
+      }
+    }
+
+    return looksLikePdfStructure(text) ? "" : text
   } catch (error) {
-    console.error("PDF extraction error with pdf-parse:", error)
-    // Fallback to basic text extraction if pdf-parse fails
-    const uint8Array = new Uint8Array(arrayBuffer)
-    const text = new TextDecoder("latin1").decode(uint8Array)
-    const readableText = sanitizeExtractedText(text)
-    return readableText.length > 50 ? readableText : `PDF processing error: ${error}`
+    const msg = error instanceof Error ? error.message : String(error)
+    console.warn(`PDF extraction warning with pdf-parse: ${msg}`)
+    if (genAI) {
+      try {
+        const ocrText = await extractPDFTextWithGemini(arrayBuffer)
+        const out = sanitizeExtractedText(ocrText)
+        if (out && out.length >= 80 && !looksLikePdfStructure(out)) return out
+      } catch (e) {
+        const status = getGeminiErrorStatus(e as any)
+        const emsg = String((e as any)?.message || e)
+        console.warn(`⚠️ Gemini PDF OCR failed (${status || "unknown"}): ${emsg}`)
+      }
+    }
+    return ""
   }
+}
+
+let lastGeminiCallAt = 0
+
+function getGeminiErrorStatus(e: any): number {
+  return Number(e?.status || e?.response?.status || 0)
+}
+
+function isTransientGeminiError(e: any): boolean {
+  const status = getGeminiErrorStatus(e)
+  const msg = String(e?.message || e)
+  return status === 429 || status === 503 || status === 504 || /overloaded|resource exhausted|try again later|timeout/i.test(msg)
+}
+
+async function enforceMinGeminiSpacing(minMs = 1200) {
+  const now = Date.now()
+  const wait = lastGeminiCallAt ? Math.max(0, minMs - (now - lastGeminiCallAt)) : 0
+  if (wait > 0) {
+    await new Promise((r) => setTimeout(r, wait))
+  }
+  lastGeminiCallAt = Date.now()
+}
+
+async function runGeminiCall<T>(fn: () => Promise<T>, opts?: { minSpacingMs?: number; maxAttempts?: number }): Promise<T> {
+  const minSpacingMs = typeof opts?.minSpacingMs === "number" ? opts.minSpacingMs : 1200
+  const maxAttempts = typeof opts?.maxAttempts === "number" ? opts.maxAttempts : 4
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await enforceMinGeminiSpacing(minSpacingMs)
+      return await fn()
+    } catch (e: any) {
+      if (isTransientGeminiError(e) && attempt < maxAttempts - 1) {
+        const status = getGeminiErrorStatus(e)
+        const base = status === 429 ? 2600 : 900
+        const jitter = Math.floor(Math.random() * 350)
+        const ms = base * Math.pow(2, attempt) + jitter
+        await new Promise((r) => setTimeout(r, ms))
+        continue
+      }
+      throw e
+    }
+  }
+  throw new Error("Gemini request failed after retries")
+}
+
+function looksLikePdfStructure(text: string): boolean {
+  const t = String(text || "")
+  const head = t.slice(0, 2200)
+  if (!head) return false
+  if (/%PDF-\d/i.test(head)) return true
+  if (/\b(xref|startxref|endobj|obj\s*<<|trailer\s*<<)\b/i.test(head)) return true
+  const letters = (head.match(/[A-Za-z]/g) || []).length
+  const ratio = letters / Math.max(1, head.length)
+  return head.length > 600 && ratio < 0.18
+}
+
+async function extractPDFTextWithGemini(arrayBuffer: ArrayBuffer): Promise<string> {
+  if (!genAI) {
+    throw new Error("Gemini API not configured")
+  }
+  const modelName = process.env.GEMINI_OCR_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash"
+  const model = genAI.getGenerativeModel({ model: modelName })
+  const pdfBase64 = Buffer.from(arrayBuffer).toString("base64")
+  const prompt =
+    "Extract all visible text from this resume PDF. Return plain text only with line breaks. Do not add, infer, or rename anything. If no text is readable, return an empty string."
+
+  const result: any = await runGeminiCall(
+    () =>
+      model.generateContent([
+        prompt,
+        {
+          inlineData: {
+            data: pdfBase64,
+            mimeType: "application/pdf",
+          },
+        },
+      ]),
+    { minSpacingMs: 1200, maxAttempts: 6 },
+  )
+
+  return result.response.text()
 }
 
 async function extractDocxText(arrayBuffer: ArrayBuffer): Promise<string> {
@@ -2455,7 +2565,7 @@ Return ONLY the JSON object:`
         Authorization: `Bearer ${openRouterApiKey}`,
         "Content-Type": "application/json",
         "HTTP-Referer": process.env.APP_PUBLIC_URL || "http://localhost:3000",
-        "X-Title": "Truckinzy Resume Parser"
+        "X-Title": "GatiHire Resume Parser"
       },
       body: JSON.stringify({
         model: "anthropic/claude-3-opus:beta",

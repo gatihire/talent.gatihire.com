@@ -22,14 +22,21 @@ export async function middleware(request: NextRequest) {
   if (pathname === "/" && (code || error)) {
     const redirectTo = request.nextUrl.clone()
     redirectTo.pathname = "/auth/callback"
-    if (!redirectTo.searchParams.get("returnTo")) redirectTo.searchParams.set("returnTo", "/jobs?login=1")
+    if (!redirectTo.searchParams.get("returnTo")) redirectTo.searchParams.set("returnTo", "/dashboard/jobs?login=1")
     return NextResponse.redirect(redirectTo)
   }
 
   if (pathname === "/") {
     const redirectTo = request.nextUrl.clone()
-    redirectTo.pathname = isAuthed ? "/dashboard/jobs" : "/auth/login"
-    redirectTo.search = isAuthed ? "" : "?returnTo=%2Fjobs"
+    redirectTo.pathname = isAuthed ? "/dashboard/jobs" : "/jobs"
+    redirectTo.search = isAuthed ? "" : "?login=1"
+    return NextResponse.redirect(redirectTo)
+  }
+
+  if (pathname === "/jobs" && isAuthed) {
+    const redirectTo = request.nextUrl.clone()
+    redirectTo.pathname = "/dashboard/jobs"
+    redirectTo.search = ""
     return NextResponse.redirect(redirectTo)
   }
 
@@ -40,12 +47,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(redirectTo)
   }
 
-  if (pathname === "/jobs" && isAuthed) {
-    const redirectTo = request.nextUrl.clone()
-    redirectTo.pathname = "/dashboard/jobs"
-    redirectTo.search = ""
-    return NextResponse.redirect(redirectTo)
-  }
+  
 
   if (protectedPrefixes.some((p) => pathname.startsWith(p)) && !isAuthed) {
     const redirectTo = request.nextUrl.clone()

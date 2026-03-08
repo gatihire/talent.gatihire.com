@@ -1,53 +1,34 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import type { Candidate, Job } from "@/lib/types"
 import { supabase } from "@/lib/supabase"
 import { useSupabaseSession } from "@/lib/useSupabaseSession"
 import { bearerHeaders, cachedFetchJson, invalidateSessionCache } from "@/lib/http"
-import { AuthStep } from "@/components/apply/AuthStep"
+import { AuthModal } from "@/components/auth/AuthModal"
 import { Badge } from "@/components/ui/Badge"
 import { Button } from "@/components/ui/Button"
 import { Card, CardBody } from "@/components/ui/Card"
 import { Input } from "@/components/ui/Input"
 import { Modal } from "@/components/ui/Modal"
-import { Briefcase, Building2, Filter, MapPin, Search, SlidersHorizontal } from "lucide-react"
+import { ThemeToggle } from "@/components/theme/ThemeToggle"
+import { BRAND_LOGO_URL, BRAND_NAME } from "@/lib/branding"
+import { ArrowRight, Briefcase, Building2, Filter, LayoutGrid, List, MapPin, Search, SlidersHorizontal } from "lucide-react"
+import {
+  BOARD_LOCATION_PRESETS,
+  MIGRATION_ALL_SUGGESTIONS,
+  MIGRATION_SKILLS,
+  MIGRATION_TOP_JOB_TITLES,
+  MIGRATION_TOP_SKILLS,
+  getSuggestionMatches,
+} from "@/lib/search-suggestions"
 
 type ClientLite = { id: string; name: string; slug: string | null; logo_url: string | null }
 
-const LOCATION_PRESETS = [
-  "Anywhere in India",
-  "Delhi NCR",
-  "Mumbai",
-  "Bengaluru",
-  "Hyderabad",
-  "Chennai",
-  "Pune",
-  "Ahmedabad",
-  "Kolkata",
-  "Jaipur",
-  "Surat",
-  "Indore",
-  "Lucknow"
-]
-
-const SKILL_SUGGESTIONS = [
-  "TMS",
-  "WMS",
-  "Route planning",
-  "Load planning",
-  "Fleet management",
-  "Dispatching",
-  "Inventory management",
-  "Warehouse operations",
-  "Excel",
-  "GPS tracking",
-  "Compliance",
-  "Vendor management",
-  "Cold chain"
-]
+const LOCATION_PRESETS = BOARD_LOCATION_PRESETS
+const SKILL_SUGGESTIONS = MIGRATION_SKILLS
 
 function tagsToMap(tags: unknown) {
   const out: Record<string, string> = {}
@@ -86,6 +67,13 @@ function buildSearchParams(input: Record<string, string>) {
 function uniqStrings(list: unknown) {
   const arr = Array.isArray(list) ? list : []
   return Array.from(new Set(arr.filter((x) => typeof x === "string").map((x) => x.trim()).filter(Boolean)))
+}
+
+function splitTokens(raw: string) {
+  return raw
+    .split(/[,\n]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean)
 }
 
 function formatRelativeTime(dateString: string | null | undefined) {
@@ -190,16 +178,19 @@ export function JobsBoardClient({
 
   const [resultsJobs, setResultsJobs] = useState<Job[]>(jobs)
   const [resultsClientsById, setResultsClientsById] = useState<Record<string, ClientLite>>(clientsById)
-  const [resultsNextCursor, setResultsNextCursor] = useState<string | null>(null)
   const [resultsLoading, setResultsLoading] = useState(false)
-  const [resultsLoadingMore, setResultsLoadingMore] = useState(false)
   const [resultsError, setResultsError] = useState<string | null>(null)
   const [resultsUsedProfileFallback, setResultsUsedProfileFallback] = useState(false)
   const [resultsLoadedOnce, setResultsLoadedOnce] = useState(false)
+  const [resultsHasMore, setResultsHasMore] = useState(false)
+
+  const pageSize = 15
 
   const [draftQ, setDraftQ] = useState("")
+  const [draftTextTokens, setDraftTextTokens] = useState<string[]>([])
   const [draftExperience, setDraftExperience] = useState<string>("any")
   const [draftLocation, setDraftLocation] = useState<string>("")
+  const [draftLocationTokens, setDraftLocationTokens] = useState<string[]>([])
   const [draftSkills, setDraftSkills] = useState<string[]>([])
   const [draftSkillInput, setDraftSkillInput] = useState("")
 
@@ -222,6 +213,7 @@ export function JobsBoardClient({
   const [appliedSalaryMin, setAppliedSalaryMin] = useState<string>("")
   const [appliedSalaryMax, setAppliedSalaryMax] = useState<string>("")
   const [appliedSort, setAppliedSort] = useState<string>("recent")
+  const [appliedPage, setAppliedPage] = useState(1)
 
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
@@ -248,18 +240,91 @@ export function JobsBoardClient({
   const [prefLocDraft, setPrefLocDraft] = useState("")
   const [prefLocFocused, setPrefLocFocused] = useState(false)
 
+  const [qFocused, setQFocused] = useState(false)
+  const [qSuggestions, setQSuggestions] = useState<string[]>([])
+  const [qSuggestBusy, setQSuggestBusy] = useState(false)
+
+  const [selectionModalOpen, setSelectionModalOpen] = useState(false)
+
+  const [pendingExternalJob, setPendingExternalJob] = useState<Job | null>(null)
+  const [didYouApplyJob, setDidYouApplyJob] = useState<Job | null>(null)
+  const [didYouApplyBusy, setDidYouApplyBusy] = useState(false)
+  const [appliedJobIds, setAppliedJobIds] = useState<string[]>([])
+  const [viewMode, setViewMode] = useState<"detailed" | "compact">("detailed")
+  const [navigatingJobId, setNavigatingJobId] = useState<string | null>(null)
+
+  const externalApplyOpenedRef = useRef<{ jobId: string | null; ts: number }>({ jobId: null, ts: 0 })
+
+  const recentlyOpenedExternalApply = (jobId: string) => {
+    const cur = externalApplyOpenedRef.current
+    return cur.jobId === jobId && Date.now() - cur.ts < 2500
+  }
+
+  useEffect(() => {
+    if (session && pendingExternalJob) {
+      const job = pendingExternalJob
+      setPendingExternalJob(null)
+      setDidYouApplyJob(job)
+      const url = (job as any).external_apply_url || (job as any).external_link || "#"
+      if (!recentlyOpenedExternalApply(job.id)) {
+        externalApplyOpenedRef.current = { jobId: job.id, ts: Date.now() }
+        window.open(url, "_blank")
+      }
+    }
+  }, [session, pendingExternalJob])
+
+  const startExternalApply = (job: Job) => {
+    const isExternal = String((job as any).apply_type || "in_platform") === "external"
+    if (!isExternal) return
+    if (pendingExternalJob || didYouApplyJob) return
+
+    if (!session) {
+      setPendingExternalJob(job)
+      openAuth("create")
+      return
+    }
+
+    setDidYouApplyJob(job)
+    const url = (job as any).external_apply_url || (job as any).external_link || "#"
+    if (!recentlyOpenedExternalApply(job.id)) {
+      externalApplyOpenedRef.current = { jobId: job.id, ts: Date.now() }
+      window.open(url, "_blank")
+    }
+  }
+
+  const handleDidYouApply = async (applied: boolean) => {
+    if (!didYouApplyJob || !session) return
+    setDidYouApplyBusy(true)
+    try {
+      if (applied) {
+        await fetch("/api/candidate/applications/submit", {
+          method: "POST",
+          headers: bearerHeaders(accessToken),
+          body: JSON.stringify({ jobId: didYouApplyJob.id })
+        })
+        setAppliedJobIds((prev) => (prev.includes(didYouApplyJob.id) ? prev : [...prev, didYouApplyJob.id]))
+      }
+      setDidYouApplyJob(null)
+    } catch {
+      // ignore
+    } finally {
+      setDidYouApplyBusy(false)
+    }
+  }
+
   useEffect(() => {
     const wantsCreate = sp.get("createProfile") === "1"
     const wantsLogin = sp.get("login") === "1"
-    if (wantsCreate) {
+    if ((wantsCreate || wantsLogin) && sessionLoading) return
+    if (wantsCreate && !session) {
       setAuthMode("create")
       setAuthOpen(true)
     }
-    if (wantsLogin) {
+    if (wantsLogin && !session) {
       setAuthMode("login")
       setAuthOpen(true)
     }
-  }, [sp])
+  }, [session, sessionLoading, sp])
 
   useEffect(() => {
     const q = normalizeText(sp.get("text") || sp.get("q") || "")
@@ -273,11 +338,15 @@ export function JobsBoardClient({
     const salMax = normalizeText(sp.get("salaryMax") || "")
     const skillsRaw = normalizeText(sp.get("skills") || "")
     const sortRaw = normalizeText(sp.get("sort") || "")
+    const pageRaw = normalizeText(sp.get("page") || "")
 
     const resolvedExp = exp ? exp : "any"
-    const resolvedLoc = loc === "Anywhere in India" ? "" : loc
 
-    setAppliedQ(q)
+    const textTokens = Array.from(new Set(splitTokens(q))).slice(0, 12)
+    const locTokens = Array.from(new Set(splitTokens(loc))).filter((x) => x !== "Anywhere in India").slice(0, 8)
+    const resolvedLoc = locTokens.join(",")
+
+    setAppliedQ(textTokens.join(","))
     setAppliedExperience(resolvedExp)
     setAppliedLocation(resolvedLoc)
     setAppliedEmploymentType(jobType || "any")
@@ -296,9 +365,14 @@ export function JobsBoardClient({
     const nextSort = sortRaw === "relevant" || sortRaw === "recent" ? sortRaw : defaultSort
     setAppliedSort(nextSort)
 
-    setDraftQ(q)
+    const nextPage = Math.max(1, Number(pageRaw || "1") || 1)
+    setAppliedPage(nextPage)
+
+    setDraftQ("")
+    setDraftTextTokens(textTokens)
     setDraftExperience(resolvedExp)
-    setDraftLocation(resolvedLoc)
+    setDraftLocation("")
+    setDraftLocationTokens(locTokens)
     setDraftEmploymentType(jobType || "any")
     setDraftShiftType(shift || "any")
     setDraftDepartment(dept || "any")
@@ -308,6 +382,86 @@ export function JobsBoardClient({
     setDraftSkills(skills)
     setDraftSort(nextSort)
   }, [session, sp])
+
+  useEffect(() => {
+    if (!accessToken || !sessionUserId) {
+      setAppliedJobIds([])
+      return
+    }
+    let cancelled = false
+    cachedFetchJson<{ applications: Array<{ job_id?: string | null }> }>(
+      `boardapp:applications:${sessionUserId}`,
+      "/api/candidate/applications",
+      { headers: bearerHeaders(accessToken) },
+      { ttlMs: 2 * 60_000 }
+    )
+      .then((data) => {
+        if (cancelled) return
+        const ids = Array.isArray(data?.applications)
+          ? data.applications
+              .map((app) => String((app as any)?.job_id || "").trim())
+              .filter(Boolean)
+          : []
+        setAppliedJobIds(Array.from(new Set(ids)))
+      })
+      .catch(() => {
+        if (!cancelled) setAppliedJobIds([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [accessToken, sessionUserId])
+
+  const appliedJobIdSet = useMemo(() => new Set(appliedJobIds), [appliedJobIds])
+
+  useEffect(() => {
+    const q = draftQ.trim()
+    if (!qFocused || q.length < 2) {
+      setQSuggestions([])
+      setQSuggestBusy(false)
+      return
+    }
+    const handle = window.setTimeout(async () => {
+      setQSuggestBusy(true)
+      try {
+        const data = await cachedFetchJson<any>(
+          `boardapp:jobsSuggest:${q.toLowerCase()}`,
+          `/api/public/jobs/suggest?text=${encodeURIComponent(q)}&limit=8`,
+          undefined,
+          { ttlMs: 5 * 60_000 }
+        )
+        const items = Array.isArray(data?.items) ? data.items.filter((x: any) => typeof x === "string").map((x: string) => x.trim()).filter(Boolean) : []
+        setQSuggestions(items.slice(0, 8))
+      } catch {
+        setQSuggestions([])
+      } finally {
+        setQSuggestBusy(false)
+      }
+    }, 140)
+    return () => window.clearTimeout(handle)
+  }, [draftQ, qFocused])
+
+  const localQSuggestions = useMemo(() => {
+    const q = draftQ.trim()
+    if (!q) return MIGRATION_TOP_JOB_TITLES.slice(0, 8)
+    return getSuggestionMatches(q, MIGRATION_ALL_SUGGESTIONS, 10)
+  }, [draftQ])
+
+  const mergedQSuggestions = useMemo(() => {
+    const out: string[] = []
+    const seen = new Set<string>()
+    const push = (v: string) => {
+      const t = v.trim()
+      if (!t) return
+      const key = t.toLowerCase()
+      if (seen.has(key)) return
+      seen.add(key)
+      out.push(t)
+    }
+    for (const s of localQSuggestions) push(s)
+    for (const s of qSuggestions) push(s)
+    return out.slice(0, 12)
+  }, [localQSuggestions, qSuggestions])
 
   const roleCategoryOptions = useMemo(() => {
     const out = new Set<string>()
@@ -357,9 +511,8 @@ export function JobsBoardClient({
     } catch {}
   }
 
-  const fetchJobsPage = async (opts: { append: boolean; cursor: string | null }) => {
-    if (opts.append) setResultsLoadingMore(true)
-    else setResultsLoading(true)
+  const fetchJobsPage = async () => {
+    setResultsLoading(true)
     setResultsError(null)
     try {
       const qp = new URLSearchParams()
@@ -374,6 +527,8 @@ export function JobsBoardClient({
       if (appliedSalaryMin) qp.set("salaryMin", appliedSalaryMin)
       if (appliedSalaryMax) qp.set("salaryMax", appliedSalaryMax)
       if (appliedSort) qp.set("sort", appliedSort)
+      qp.set("page", String(appliedPage))
+      qp.set("pageSize", String(pageSize))
 
       const profileRoleTerms = Array.from(
         new Set([
@@ -387,9 +542,6 @@ export function JobsBoardClient({
         qp.set("role_terms", profileRoleTerms.join(","))
       }
 
-      qp.set("limit", "30")
-      if (opts.cursor) qp.set("cursor", opts.cursor)
-
       const url = `/api/public/jobs/search?${qp.toString()}`
       const cacheKey = `boardapp:jobsSearch:${url}`
       const data = await cachedFetchJson<any>(cacheKey, url, undefined, { ttlMs: 5 * 60_000 })
@@ -397,26 +549,25 @@ export function JobsBoardClient({
       const pageJobs = Array.isArray(data?.jobs) ? (data.jobs as Job[]) : ([] as Job[])
       const pageClients = data?.clientsById && typeof data.clientsById === "object" ? (data.clientsById as Record<string, ClientLite>) : {}
 
-      setResultsClientsById((prev) => (opts.append ? { ...prev, ...pageClients } : pageClients))
-      setResultsJobs((prev) => (opts.append ? [...prev, ...pageJobs] : pageJobs))
-      setResultsNextCursor(typeof data?.nextCursor === "string" ? data.nextCursor : null)
+      const hasMore = Boolean(data?.hasMore)
+
+      setResultsClientsById(pageClients)
+      setResultsJobs(pageJobs)
+      setResultsHasMore(hasMore)
       setResultsUsedProfileFallback(Boolean(data?.usedProfileFallback))
       setResultsLoadedOnce(true)
     } catch (e: any) {
       setResultsError(e?.message || "Failed to load jobs")
-      if (!opts.append) {
-        setResultsJobs([])
-        setResultsClientsById({})
-        setResultsNextCursor(null)
-      }
+      setResultsJobs([])
+      setResultsClientsById({})
+      setResultsHasMore(false)
     } finally {
-      if (opts.append) setResultsLoadingMore(false)
-      else setResultsLoading(false)
+      setResultsLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchJobsPage({ append: false, cursor: null })
+    fetchJobsPage()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     appliedQ,
@@ -430,17 +581,13 @@ export function JobsBoardClient({
     appliedSalaryMin,
     appliedSalaryMax,
     appliedSort,
+    appliedPage,
     session,
     profileRoleFilterOn,
     candidate?.desired_role || "",
     Array.isArray((candidate as any)?.preferred_roles) ? String(((candidate as any).preferred_roles as unknown[]).join(",")) : "",
     candidate?.updated_at || ""
   ])
-
-  const loadMore = () => {
-    if (!resultsNextCursor || resultsLoadingMore) return
-    fetchJobsPage({ append: true, cursor: resultsNextCursor })
-  }
 
   const disableProfileRoleFilter = () => {
     const uid = (session as any)?.user?.id ? String((session as any).user.id) : ""
@@ -480,22 +627,17 @@ export function JobsBoardClient({
 
   const suggestedSkills = useMemo(() => {
     const fromProfile = uniqStrings((candidate as any)?.technical_skills)
-    return Array.from(new Set([...fromProfile, ...SKILL_SUGGESTIONS])).slice(0, 30)
+    return Array.from(new Set([...fromProfile, ...MIGRATION_TOP_SKILLS, ...SKILL_SUGGESTIONS])).slice(0, 60)
   }, [candidate])
 
   const skillTypeahead = useMemo(() => {
-    const q = draftSkillInput.trim().toLowerCase()
-    if (!q) return [] as string[]
     const taken = new Set(draftSkills.map((s) => s.toLowerCase()))
-    return suggestedSkills
-      .filter((x) => x.toLowerCase().includes(q) && !taken.has(x.toLowerCase()))
-      .slice(0, 10)
+    const base = getSuggestionMatches(draftSkillInput, suggestedSkills, 60)
+    return base.filter((x) => !taken.has(x.toLowerCase())).slice(0, 24)
   }, [draftSkillInput, draftSkills, suggestedSkills])
 
   const locationTypeahead = useMemo(() => {
-    const q = draftLocation.trim().toLowerCase()
-    if (!q) return [] as string[]
-    return LOCATION_PRESETS.filter((x) => x.toLowerCase().includes(q)).slice(0, 10)
+    return getSuggestionMatches(draftLocation, LOCATION_PRESETS, 10)
   }, [draftLocation])
 
   const prefLocationTypeahead = useMemo(() => {
@@ -515,12 +657,37 @@ export function JobsBoardClient({
     setDraftSkills((prev) => prev.filter((s) => s !== skill))
   }
 
+  const addDraftTextToken = (raw: string) => {
+    const parts = splitTokens(raw)
+    if (!parts.length) return
+    setDraftTextTokens((prev) => Array.from(new Set([...prev, ...parts])).slice(0, 12))
+    setDraftQ("")
+    setQSuggestions([])
+  }
+
+  const removeDraftTextToken = (token: string) => {
+    setDraftTextTokens((prev) => prev.filter((t) => t !== token))
+  }
+
+  const addDraftLocationToken = (raw: string) => {
+    const parts = splitTokens(raw).filter((x) => x !== "Anywhere in India")
+    if (!parts.length) return
+    setDraftLocationTokens((prev) => Array.from(new Set([...prev, ...parts])).slice(0, 8))
+    setDraftLocation("")
+  }
+
+  const removeDraftLocationToken = (token: string) => {
+    setDraftLocationTokens((prev) => prev.filter((t) => t !== token))
+  }
+
   const locationPlaceholder = useMemo(() => {
+    if (draftLocationTokens.length) return "Add another location"
     if (preferredLocation && preferredLocation !== "Anywhere in India") return preferredLocation
-    return "Anywhere in India"
-  }, [preferredLocation])
+    return "e.g. Bhiwandi, Manesar, Sriperumbudur"
+  }, [draftLocationTokens.length, preferredLocation])
 
   const [roleModalOpen, setRoleModalOpen] = useState(false)
+  const [sortModalOpen, setSortModalOpen] = useState(false)
   const [roleModalBusy, setRoleModalBusy] = useState(false)
   const [roleModalError, setRoleModalError] = useState<string | null>(null)
   const [roleModalQuery, setRoleModalQuery] = useState("")
@@ -556,29 +723,31 @@ export function JobsBoardClient({
     }
   }
 
-  const closeRoleModal = () => {
+  const closeRoleModal = useCallback(() => {
     setRoleModalOpen(false)
     setRoleModalQuery("")
     setRoleModalError(null)
-  }
+  }, [])
 
-  const openAuth = (mode: "create" | "login") => {
+  const openAuth = useCallback((mode: "create" | "login") => {
     setAuthMode(mode)
     setAuthOpen(true)
     const next = new URLSearchParams(sp.toString())
     next.delete("createProfile")
     next.delete("login")
+    next.set("returnTo", "/dashboard/jobs")
     next.set(mode === "create" ? "createProfile" : "login", "1")
     router.replace(`${pathname}?${next.toString()}`, { scroll: false })
-  }
+  }, [pathname, router, sp])
 
-  const closeAuth = () => {
+  const closeAuth = useCallback(() => {
     setAuthOpen(false)
     const next = new URLSearchParams(sp.toString())
     next.delete("createProfile")
     next.delete("login")
+    next.delete("returnTo")
     router.replace(next.toString() ? `${pathname}?${next.toString()}` : pathname, { scroll: false })
-  }
+  }, [pathname, router, sp])
 
   const signOut = async () => {
     await supabase.auth.signOut()
@@ -623,10 +792,26 @@ export function JobsBoardClient({
     await updateCandidate({ open_job_types: Array.from(set) } as any)
   }
 
-  const applySearch = () => {
+  const applySearch = (override?: { text?: string }) => {
+    const nextTextTokens = Array.from(
+      new Set([
+        ...draftTextTokens,
+        ...splitTokens(typeof override?.text === "string" ? override.text : draftQ)
+      ].map((x) => x.trim()).filter(Boolean))
+    ).slice(0, 12)
+
+    const nextLocTokens = Array.from(
+      new Set([
+        ...draftLocationTokens,
+        ...splitTokens(draftLocation)
+      ].map((x) => x.trim()).filter(Boolean))
+    )
+      .filter((x) => x !== "Anywhere in India")
+      .slice(0, 8)
+
     const next = buildSearchParams({
-      text: draftQ,
-      location_name: draftLocation,
+      text: nextTextTokens.join(","),
+      location_name: nextLocTokens.join(","),
       skills: draftSkills.length ? draftSkills.join(",") : "",
       jobType: draftEmploymentType !== "any" ? draftEmploymentType : "",
       shift: draftShiftType !== "any" ? draftShiftType : "",
@@ -638,16 +823,23 @@ export function JobsBoardClient({
       sort: draftSort,
     })
     if (next.toString()) next.set("search", "true")
+    next.set("page", "1")
     const qs = next.toString()
     router.push(qs ? `${pathname}?${qs}` : pathname)
     setFiltersOpen(false)
+    setDraftQ("")
+    setDraftLocation("")
   }
 
   const applySort = (nextSort: string) => {
     setDraftSort(nextSort)
+    const nextTextTokens = Array.from(new Set([...draftTextTokens, ...splitTokens(draftQ)].map((x) => x.trim()).filter(Boolean))).slice(0, 12)
+    const nextLocTokens = Array.from(new Set([...draftLocationTokens, ...splitTokens(draftLocation)].map((x) => x.trim()).filter(Boolean)))
+      .filter((x) => x !== "Anywhere in India")
+      .slice(0, 8)
     const next = buildSearchParams({
-      text: draftQ,
-      location_name: draftLocation,
+      text: nextTextTokens.join(","),
+      location_name: nextLocTokens.join(","),
       skills: draftSkills.length ? draftSkills.join(",") : "",
       jobType: draftEmploymentType !== "any" ? draftEmploymentType : "",
       shift: draftShiftType !== "any" ? draftShiftType : "",
@@ -659,14 +851,17 @@ export function JobsBoardClient({
       sort: nextSort,
     })
     if (next.toString()) next.set("search", "true")
+    next.set("page", "1")
     const qs = next.toString()
     router.push(qs ? `${pathname}?${qs}` : pathname)
   }
 
   const clearAll = () => {
     setDraftQ("")
+    setDraftTextTokens([])
     setDraftExperience("any")
     setDraftLocation("")
+    setDraftLocationTokens([])
     setDraftSkills([])
     setDraftSkillInput("")
     setDraftEmploymentType("any")
@@ -682,7 +877,9 @@ export function JobsBoardClient({
 
   const draftHasMeaningfulSearch = Boolean(
     draftQ.trim() ||
+      draftTextTokens.length ||
       draftLocation.trim() ||
+      draftLocationTokens.length ||
       draftSkills.length ||
       draftExperience !== "any" ||
       draftEmploymentType !== "any" ||
@@ -756,22 +953,26 @@ export function JobsBoardClient({
   }
 
   const FiltersPanel = (
-    <div className="grid gap-3">
+    <div className="grid gap-4">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <SlidersHorizontal className="h-4 w-4" />
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
           <span>Filters</span>
-          <span className="text-muted-foreground">({activeChips.length})</span>
+          <span className="text-muted-foreground font-normal">({activeChips.length})</span>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setFiltersCollapsed((v) => !v)}
-            className="rounded-lg border bg-background px-2 py-1 text-xs text-muted-foreground"
+            className="rounded-lg border border-border/60 bg-card/60 px-2 py-1 text-xs text-muted-foreground hover:bg-accent/60 transition-colors"
           >
             {filtersCollapsed ? "Show" : "Hide"}
           </button>
-          <button type="button" onClick={clearAll} className="text-sm font-semibold text-emerald-700">
+          <button 
+            type="button" 
+            onClick={clearAll} 
+            className="text-sm font-semibold text-primary hover:text-primary/90 transition-colors"
+          >
             Clear all
           </button>
         </div>
@@ -784,20 +985,23 @@ export function JobsBoardClient({
               key={`f:${c.key}:${c.value}`}
               type="button"
               onClick={() => removeChip(c.key)}
-              className="inline-flex items-center gap-2 rounded-full border bg-blue-50 px-3 py-1.5 text-xs text-blue-800"
+              className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs text-foreground/80 hover:bg-accent/60 transition-all duration-200 shadow-sm shadow-black/20"
             >
-              <span className="max-w-[170px] truncate">{c.value}</span>
-              <span>×</span>
+              <span className="max-w-[170px] truncate font-medium">{c.value}</span>
+              <span className="text-muted-foreground hover:text-foreground">×</span>
             </button>
           ))}
-          {activeChips.length > 6 ? <span className="text-xs text-muted-foreground">+{activeChips.length - 6} more</span> : null}
+          {activeChips.length > 6 ? <span className="text-xs text-muted-foreground font-medium">+{activeChips.length - 6} more</span> : null}
         </div>
       ) : null}
 
       {filtersCollapsed ? (
         <div className="grid gap-2">
-          <Button className="rounded-xl" onClick={applySearch}>
-            Apply
+          <Button 
+            className="rounded-xl font-medium"
+            onClick={() => applySearch()}
+          >
+            Apply filters
           </Button>
         </div>
       ) : (
@@ -836,35 +1040,48 @@ export function JobsBoardClient({
                   ) : null}
 
                   {sec.id === "salary" ? (
-                    <div className="grid grid-cols-2 gap-2">
-                      <select
-                        value={draftSalaryMin}
-                        onChange={(e) => setDraftSalaryMin(e.target.value)}
-                        className="h-11 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/20"
-                      >
-                        <option value="">Min</option>
-                        <option value="10000">₹10k</option>
-                        <option value="20000">₹20k</option>
-                        <option value="30000">₹30k</option>
-                        <option value="40000">₹40k</option>
-                        <option value="50000">₹50k</option>
-                        <option value="70000">₹70k</option>
-                        <option value="100000">₹1L</option>
-                      </select>
-                      <select
-                        value={draftSalaryMax}
-                        onChange={(e) => setDraftSalaryMax(e.target.value)}
-                        className="h-11 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/20"
-                      >
-                        <option value="">Max</option>
-                        <option value="20000">₹20k</option>
-                        <option value="30000">₹30k</option>
-                        <option value="40000">₹40k</option>
-                        <option value="50000">₹50k</option>
-                        <option value="70000">₹70k</option>
-                        <option value="100000">₹1L</option>
-                        <option value="150000">₹1.5L</option>
-                      </select>
+                    <div className="grid gap-4">
+                      <div className="text-sm text-muted-foreground">Monthly salary range</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium text-muted-foreground">Min (₹)</label>
+                          <input
+                            type="number"
+                            value={draftSalaryMin}
+                            onChange={(e) => setDraftSalaryMin(e.target.value)}
+                            placeholder="10000"
+                            className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/20"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium text-muted-foreground">Max (₹)</label>
+                          <input
+                            type="number"
+                            value={draftSalaryMax}
+                            onChange={(e) => setDraftSalaryMax(e.target.value)}
+                            placeholder="50000"
+                            className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/20"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {["10000", "20000", "30000", "50000", "100000"].map((amount) => (
+                          <button
+                            key={amount}
+                            onClick={() => {
+                              if (!draftSalaryMin) setDraftSalaryMin(amount)
+                              else if (!draftSalaryMax) setDraftSalaryMax(amount)
+                              else {
+                                setDraftSalaryMin(amount)
+                                setDraftSalaryMax("")
+                              }
+                            }}
+                            className="rounded-md border border-border/60 bg-card/60 px-2.5 py-1.5 text-xs font-medium text-foreground/80 hover:bg-accent/60 transition-colors duration-200"
+                          >
+                            ₹{Number(amount) >= 100000 ? `${Number(amount) / 100000}L` : `${Number(amount) / 1000}k`}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
 
@@ -927,7 +1144,7 @@ export function JobsBoardClient({
           </div>
         ))}
 
-        <Button className="rounded-xl" onClick={applySearch}>
+        <Button className="rounded-xl" onClick={() => applySearch()}>
           Apply
         </Button>
       </div>
@@ -941,357 +1158,363 @@ export function JobsBoardClient({
         <button
           type="button"
           onClick={() => setFiltersOpen(false)}
-          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-violet-600 text-white"
+          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground"
           aria-label="Close"
         >
           ×
         </button>
 
-        <div className="flex h-[70vh]">
-          <div className="w-[150px] shrink-0 border-r bg-accent/60 p-2">
-            {(
-              [
-                { id: "sort", label: "Sort by" },
-                { id: "salary", label: "Salary" },
-                { id: "experience", label: "Experience" },
-                { id: "work_type", label: "Work type" },
-                { id: "work_shift", label: "Work shift" },
-                { id: "department", label: "Department" },
-                { id: "role", label: "Role" },
-                { id: "prefs", label: "Preferences" }
-              ] as const
-            ).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setMobileFilterSection(item.id)}
-                className={[
-                  "relative w-full rounded-xl px-3 py-3 text-left text-sm",
-                  mobileFilterSection === item.id ? "bg-background font-semibold" : "text-muted-foreground"
-                ].join(" ")}
-              >
-                <span
+        <div className="flex h-[75vh] flex-col">
+          <div className="flex flex-1 overflow-hidden">
+            <div className="w-[160px] shrink-0 border-r bg-accent/60 p-2">
+              {(
+                [
+                  { id: "sort", label: "Sort by" },
+                  { id: "salary", label: "Salary" },
+                  { id: "experience", label: "Experience" },
+                  { id: "work_type", label: "Work type" },
+                  { id: "work_shift", label: "Work shift" },
+                  { id: "department", label: "Department" },
+                  { id: "role", label: "Role" },
+                  { id: "prefs", label: "Preferences" }
+                ] as const
+              ).map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setMobileFilterSection(item.id)}
                   className={[
-                    "absolute left-0 top-0 h-full w-1 rounded-r-full",
-                    mobileFilterSection === item.id ? "bg-emerald-600" : "bg-transparent"
+                    "relative w-full rounded-xl px-3 py-3 text-left text-sm",
+                    mobileFilterSection === item.id ? "bg-background font-semibold" : "text-muted-foreground"
                   ].join(" ")}
-                />
-                {item.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex-1 overflow-auto p-4">
-            {mobileFilterSection === "sort" ? (
-              <div className="grid gap-3">
-                <div className="text-sm font-semibold">Sort by</div>
-                {[...(session ? ([{ id: "relevant", label: "Relevant" }] as const) : []),
-                  { id: "recent", label: "Date posted - New to Old" } as const
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setDraftSort(opt.id)}
-                    className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
-                  >
-                    <span
-                      className={[
-                        "inline-flex h-5 w-5 items-center justify-center rounded-full border",
-                        draftSort === opt.id ? "border-emerald-600 bg-emerald-600 text-white" : "border-muted"
-                      ].join(" ")}
-                    >
-                      {draftSort === opt.id ? "✓" : ""}
-                    </span>
-                    <span className={draftSort === opt.id ? "font-semibold" : "text-muted-foreground"}>{opt.label}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {mobileFilterSection === "salary" ? (
-              <div className="grid gap-3">
-                <div className="text-sm font-semibold">Salary range (monthly)</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    value={draftSalaryMin}
-                    onChange={(e) => setDraftSalaryMin(e.target.value)}
-                    className="h-11 w-full rounded-2xl border border-input bg-card px-3 text-sm"
-                  >
-                    <option value="">Min</option>
-                    <option value="10000">₹10k</option>
-                    <option value="20000">₹20k</option>
-                    <option value="30000">₹30k</option>
-                    <option value="40000">₹40k</option>
-                    <option value="50000">₹50k</option>
-                    <option value="70000">₹70k</option>
-                    <option value="100000">₹1L</option>
-                  </select>
-                  <select
-                    value={draftSalaryMax}
-                    onChange={(e) => setDraftSalaryMax(e.target.value)}
-                    className="h-11 w-full rounded-2xl border border-input bg-card px-3 text-sm"
-                  >
-                    <option value="">Max</option>
-                    <option value="20000">₹20k</option>
-                    <option value="30000">₹30k</option>
-                    <option value="40000">₹40k</option>
-                    <option value="50000">₹50k</option>
-                    <option value="70000">₹70k</option>
-                    <option value="100000">₹1L</option>
-                    <option value="150000">₹1.5L</option>
-                  </select>
-                </div>
-              </div>
-            ) : null}
-
-            {mobileFilterSection === "experience" ? (
-              <div className="grid gap-3">
-                <div className="text-sm font-semibold">Experience</div>
-                {["any", "fresher", "1_2", "3_5", "5_plus"].map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setDraftExperience(v)}
-                    className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
-                  >
-                    <span
-                      className={[
-                        "inline-flex h-5 w-5 items-center justify-center rounded-full border",
-                        draftExperience === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-muted"
-                      ].join(" ")}
-                    >
-                      {draftExperience === v ? "✓" : ""}
-                    </span>
-                    <span className={draftExperience === v ? "font-semibold" : "text-muted-foreground"}>
-                      {v === "any" ? "Any" : v === "fresher" ? "Fresher" : v === "1_2" ? "1-2 years" : v === "3_5" ? "3-5 years" : "5+ years"}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {mobileFilterSection === "work_type" ? (
-              <div className="grid gap-3">
-                <div className="text-sm font-semibold">Work type</div>
-                {[
-                  { id: "any", label: "Any" },
-                  { id: "full_time", label: "Full time" },
-                  { id: "part_time", label: "Part time" },
-                  { id: "contract", label: "Contract" }
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setDraftEmploymentType(opt.id)}
-                    className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
-                  >
-                    <span
-                      className={[
-                        "inline-flex h-5 w-5 items-center justify-center rounded-full border",
-                        draftEmploymentType === opt.id ? "border-emerald-600 bg-emerald-600 text-white" : "border-muted"
-                      ].join(" ")}
-                    >
-                      {draftEmploymentType === opt.id ? "✓" : ""}
-                    </span>
-                    <span className={draftEmploymentType === opt.id ? "font-semibold" : "text-muted-foreground"}>{opt.label}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {mobileFilterSection === "work_shift" ? (
-              <div className="grid gap-3">
-                <div className="text-sm font-semibold">Work shift</div>
-                {[
-                  { id: "any", label: "Any" },
-                  { id: "day", label: "Day" },
-                  { id: "night", label: "Night" },
-                  { id: "rotational", label: "Rotational" }
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setDraftShiftType(opt.id)}
-                    className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
-                  >
-                    <span
-                      className={[
-                        "inline-flex h-5 w-5 items-center justify-center rounded-full border",
-                        draftShiftType === opt.id ? "border-emerald-600 bg-emerald-600 text-white" : "border-muted"
-                      ].join(" ")}
-                    >
-                      {draftShiftType === opt.id ? "✓" : ""}
-                    </span>
-                    <span className={draftShiftType === opt.id ? "font-semibold" : "text-muted-foreground"}>{opt.label}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {mobileFilterSection === "department" ? (
-              <div className="grid gap-3">
-                <div className="text-sm font-semibold">Department</div>
-                {[
-                  { id: "any", label: "Any" },
-                  { id: "operations", label: "Operations" },
-                  { id: "fleet", label: "Fleet" },
-                  { id: "dispatch", label: "Dispatch" },
-                  { id: "warehouse", label: "Warehouse" }
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setDraftDepartment(opt.id)}
-                    className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
-                  >
-                    <span
-                      className={[
-                        "inline-flex h-5 w-5 items-center justify-center rounded-full border",
-                        draftDepartment === opt.id ? "border-emerald-600 bg-emerald-600 text-white" : "border-muted"
-                      ].join(" ")}
-                    >
-                      {draftDepartment === opt.id ? "✓" : ""}
-                    </span>
-                    <span className={draftDepartment === opt.id ? "font-semibold" : "text-muted-foreground"}>{opt.label}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {mobileFilterSection === "role" ? (
-              <div className="grid gap-3">
-                <div className="text-sm font-semibold">Role category</div>
-                <select
-                  value={draftRoleCategory}
-                  onChange={(e) => setDraftRoleCategory(e.target.value)}
-                  className="h-11 w-full rounded-2xl border border-input bg-background px-3 text-sm shadow-sm"
                 >
-                  <option value="any">Any</option>
-                  {roleCategoryOptions.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {formatEnum(opt)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-
-            {mobileFilterSection === "prefs" ? (
-              <div className="grid gap-4">
-                <div className="text-sm font-semibold">Preferences</div>
-
-                <div className="rounded-2xl border bg-background p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-semibold">Preferred title/role</div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!session || prefsBusy) return
-                        openRoleModal()
-                      }}
-                      className="text-sm font-semibold text-emerald-700"
-                    >
-                      Edit
-                    </button>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {(explicitPreferredRoles.length ? explicitPreferredRoles : desiredRole ? [desiredRole] : []).slice(0, 6).map((r) => (
-                      <span key={r} className="rounded-full border bg-white px-3 py-1.5 text-xs">
-                        {r}
-                      </span>
-                    ))}
-                    {!explicitPreferredRoles.length && !desiredRole ? (
-                      <div className="text-sm text-muted-foreground">Add roles to filter jobs based on your profile</div>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border bg-background p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-semibold">Preferred location</div>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (!session || prefsBusy) return
-                        await updateCandidate({ preferred_location: prefLocDraft.trim() } as any)
-                        setPrefLocFocused(false)
-                      }}
-                      className="text-sm font-semibold text-emerald-700"
-                    >
-                      Save
-                    </button>
-                  </div>
-                  <div className="relative mt-3">
-                    <Input
-                      value={prefLocDraft}
-                      onChange={(e) => setPrefLocDraft(e.target.value)}
-                      onFocus={() => setPrefLocFocused(true)}
-                      onBlur={() => {
-                        window.setTimeout(() => setPrefLocFocused(false), 120)
-                      }}
-                      placeholder="e.g. Delhi NCR"
-                    />
-                    {prefLocFocused && prefLocDraft.trim() && prefLocationTypeahead.length ? (
-                      <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-2xl border bg-white shadow-lg">
-                        {prefLocationTypeahead.map((opt) => (
-                          <button
-                            key={`prefLoc:${opt}`}
-                            type="button"
-                            onClick={() => setPrefLocDraft(opt)}
-                            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm hover:bg-accent"
-                          >
-                            <MapPin className="h-4 w-4 text-muted-foreground" />
-                            <span className="truncate">{opt}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="mt-2 text-xs text-muted-foreground">Used as a suggestion; it won’t hide jobs unless you filter by location.</div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {activeChips.length ? (
-          <div className="border-t bg-emerald-50 px-4 py-3">
-            <div className="flex flex-wrap gap-2">
-              {activeChips.map((c) => (
-                <div key={`${c.key}:${c.value}`} className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs text-emerald-800">
-                  <span className="max-w-[200px] truncate">{c.value}</span>
-                  <span className="text-emerald-800">×</span>
-                </div>
+                  <span
+                    className={[
+                      "absolute left-0 top-0 h-full w-1 rounded-r-full",
+                      mobileFilterSection === item.id ? "bg-primary" : "bg-transparent"
+                    ].join(" ")}
+                  />
+                  {item.label}
+                </button>
               ))}
             </div>
-          </div>
-        ) : null}
 
-        <div className="flex items-center justify-between gap-3 border-t bg-background px-4 py-4">
-          <button type="button" onClick={clearAll} className="text-sm font-semibold text-emerald-700">
-            Clear Filters
-          </button>
-          <button type="button" onClick={applySearch} className="h-12 rounded-2xl bg-emerald-700 px-8 text-sm font-semibold text-white">
-            Apply
-          </button>
+            <div className="flex-1 overflow-auto p-4">
+              {mobileFilterSection === "sort" ? (
+                <div className="grid gap-3">
+                  <div className="text-sm font-semibold">Sort by</div>
+                  {[...(session ? ([{ id: "relevant", label: "Relevant" }] as const) : []),
+                    { id: "recent", label: "Date posted - New to Old" } as const
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setDraftSort(opt.id)}
+                      className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
+                    >
+                      <span
+                        className={[
+                          "inline-flex h-5 w-5 items-center justify-center rounded-full border",
+                          draftSort === opt.id ? "border-primary bg-primary text-primary-foreground" : "border-muted"
+                        ].join(" ")}
+                      >
+                        {draftSort === opt.id ? "✓" : ""}
+                      </span>
+                      <span className={draftSort === opt.id ? "font-semibold" : "text-muted-foreground"}>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {mobileFilterSection === "salary" ? (
+                <div className="grid gap-4">
+                  <div className="text-sm font-semibold">Monthly salary range</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-muted-foreground">Min (₹)</label>
+                      <input
+                        type="number"
+                        value={draftSalaryMin}
+                        onChange={(e) => setDraftSalaryMin(e.target.value)}
+                        placeholder="10000"
+                        className="h-10 w-full rounded-xl border border-input bg-card px-3 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-muted-foreground">Max (₹)</label>
+                      <input
+                        type="number"
+                        value={draftSalaryMax}
+                        onChange={(e) => setDraftSalaryMax(e.target.value)}
+                        placeholder="50000"
+                        className="h-10 w-full rounded-xl border border-input bg-card px-3 text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {["10000", "20000", "30000", "50000", "100000"].map((amount) => (
+                      <button
+                        key={amount}
+                        onClick={() => {
+                          if (!draftSalaryMin) setDraftSalaryMin(amount)
+                          else if (!draftSalaryMax) setDraftSalaryMax(amount)
+                          else {
+                            setDraftSalaryMin(amount)
+                            setDraftSalaryMax("")
+                          }
+                        }}
+                        className="rounded-lg border border-border/60 bg-card/60 px-3 py-2 text-xs font-medium text-foreground/80"
+                      >
+                        ₹{Number(amount) >= 100000 ? `${Number(amount) / 100000}L` : `${Number(amount) / 1000}k`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {mobileFilterSection === "experience" ? (
+                <div className="grid gap-3">
+                  <div className="text-sm font-semibold">Experience</div>
+                  {["any", "fresher", "1_2", "3_5", "5_plus"].map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setDraftExperience(v)}
+                      className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
+                    >
+                      <span
+                        className={[
+                          "inline-flex h-5 w-5 items-center justify-center rounded-full border",
+                          draftExperience === v ? "border-primary bg-primary text-primary-foreground" : "border-muted"
+                        ].join(" ")}
+                      >
+                        {draftExperience === v ? "✓" : ""}
+                      </span>
+                      <span className={draftExperience === v ? "font-semibold" : "text-muted-foreground"}>
+                        {v === "any" ? "Any" : v === "fresher" ? "Fresher" : v === "1_2" ? "1-2 years" : v === "3_5" ? "3-5 years" : "5+ years"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {mobileFilterSection === "work_type" ? (
+                <div className="grid gap-3">
+                  <div className="text-sm font-semibold">Work type</div>
+                  {[
+                    { id: "any", label: "Any" },
+                    { id: "full_time", label: "Full time" },
+                    { id: "part_time", label: "Part time" },
+                    { id: "contract", label: "Contract" }
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setDraftEmploymentType(opt.id)}
+                      className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
+                    >
+                      <span
+                        className={[
+                          "inline-flex h-5 w-5 items-center justify-center rounded-full border",
+                          draftEmploymentType === opt.id ? "border-primary bg-primary text-primary-foreground" : "border-muted"
+                        ].join(" ")}
+                      >
+                        {draftEmploymentType === opt.id ? "✓" : ""}
+                      </span>
+                      <span className={draftEmploymentType === opt.id ? "font-semibold" : "text-muted-foreground"}>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {mobileFilterSection === "work_shift" ? (
+                <div className="grid gap-3">
+                  <div className="text-sm font-semibold">Work shift</div>
+                  {[
+                    { id: "any", label: "Any" },
+                    { id: "day", label: "Day" },
+                    { id: "night", label: "Night" },
+                    { id: "rotational", label: "Rotational" }
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setDraftShiftType(opt.id)}
+                      className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
+                    >
+                      <span
+                        className={[
+                          "inline-flex h-5 w-5 items-center justify-center rounded-full border",
+                          draftShiftType === opt.id ? "border-primary bg-primary text-primary-foreground" : "border-muted"
+                        ].join(" ")}
+                      >
+                        {draftShiftType === opt.id ? "✓" : ""}
+                      </span>
+                      <span className={draftShiftType === opt.id ? "font-semibold" : "text-muted-foreground"}>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {mobileFilterSection === "department" ? (
+                <div className="grid gap-3">
+                  <div className="text-sm font-semibold">Department</div>
+                  {[
+                    { id: "any", label: "Any" },
+                    { id: "operations", label: "Operations" },
+                    { id: "fleet", label: "Fleet" },
+                    { id: "dispatch", label: "Dispatch" },
+                    { id: "warehouse", label: "Warehouse" }
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setDraftDepartment(opt.id)}
+                      className="flex w-full items-center gap-3 rounded-2xl border bg-background px-4 py-3 text-sm"
+                    >
+                      <span
+                        className={[
+                          "inline-flex h-5 w-5 items-center justify-center rounded-full border",
+                          draftDepartment === opt.id ? "border-primary bg-primary text-primary-foreground" : "border-muted"
+                        ].join(" ")}
+                      >
+                        {draftDepartment === opt.id ? "✓" : ""}
+                      </span>
+                      <span className={draftDepartment === opt.id ? "font-semibold" : "text-muted-foreground"}>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {mobileFilterSection === "role" ? (
+                <div className="grid gap-3">
+                  <div className="text-sm font-semibold">Role category</div>
+                  <select
+                    value={draftRoleCategory}
+                    onChange={(e) => setDraftRoleCategory(e.target.value)}
+                    className="h-11 w-full rounded-2xl border border-input bg-background px-3 text-sm shadow-sm"
+                  >
+                    <option value="any">Any</option>
+                    {roleCategoryOptions.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {formatEnum(opt)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+
+              {mobileFilterSection === "prefs" ? (
+                <div className="grid gap-4">
+                  <div className="text-sm font-semibold">Preferences</div>
+
+                  <div className="rounded-2xl border bg-background p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold">Preferred title/role</div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!session || prefsBusy) return
+                          openRoleModal()
+                        }}
+                        className="text-sm font-semibold text-primary"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {(explicitPreferredRoles.length ? explicitPreferredRoles : desiredRole ? [desiredRole] : []).slice(0, 6).map((r) => (
+                        <span key={r} className="rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs">
+                          {r}
+                        </span>
+                      ))}
+                      {!explicitPreferredRoles.length && !desiredRole ? (
+                        <div className="text-sm text-muted-foreground">Add roles to filter jobs based on your profile</div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border bg-background p-4">
+                    <div className="text-sm font-semibold">Preferred location</div>
+                    <div className="relative mt-3">
+                      <Input
+                        value={prefLocDraft}
+                        onChange={(e) => setPrefLocDraft(e.target.value)}
+                        onFocus={() => setPrefLocFocused(true)}
+                        onBlur={() => {
+                          window.setTimeout(() => setPrefLocFocused(false), 120)
+                        }}
+                        placeholder="e.g. Bhiwandi, Delhi NCR"
+                      />
+                      {prefLocFocused && prefLocDraft.trim() && prefLocationTypeahead.length ? (
+                        <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-2xl border border-border/60 bg-popover shadow-lg shadow-black/10 dark:shadow-black/40">
+                          {prefLocationTypeahead.map((opt) => (
+                            <button
+                              key={`prefLoc:${opt}`}
+                              type="button"
+                              onClick={() => setPrefLocDraft(opt)}
+                              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm hover:bg-accent"
+                            >
+                              <MapPin className="h-4 w-4 text-muted-foreground" />
+                              <span className="truncate">{opt}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="mt-3 flex items-center justify-end">
+                      <Button
+                        size="sm"
+                        className="rounded-xl"
+                        onClick={async () => {
+                          if (!session || prefsBusy) return
+                          await updateCandidate({ preferred_location: prefLocDraft.trim() } as any)
+                          setPrefLocFocused(false)
+                        }}
+                        disabled={!session || prefsBusy}
+                      >
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 border-t bg-background px-4 py-4">
+            <button type="button" onClick={clearAll} className="text-sm font-semibold text-primary">
+              Clear Filters
+            </button>
+            <button type="button" onClick={() => applySearch()} className="h-12 rounded-2xl bg-primary px-8 text-sm font-semibold text-primary-foreground">
+              Apply
+            </button>
+          </div>
         </div>
       </div>
     </div>
   )
 
   return (
-    <div className={embedded ? "" : "min-h-screen bg-[#F6F7FB]"}>
+    <div className={embedded ? "" : "min-h-screen bg-app"}>
       {embedded ? null : (
-        <header className="sticky top-0 z-40 border-b bg-white/80 backdrop-blur">
+        <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur">
           <div className="flex h-16 w-full items-center justify-between px-4">
             <Link href="/jobs" className="flex items-center gap-2">
-              <div className="h-9 w-9 rounded-xl bg-primary/10" />
-              <div className="min-w-0">
-                <div className="text-sm font-semibold truncate">Truckinzy Jobs</div>
-                <div className="text-xs text-muted-foreground truncate">Logistics • Transport • Supply Chain</div>
+              <div className="h-9 w-28 overflow-hidden">
+                <img 
+                  src={BRAND_LOGO_URL} 
+                  alt={BRAND_NAME} 
+                  className="h-full w-full object-contain dark:invert transition-all duration-300" 
+                />
               </div>
+              {/* <div className="min-w-0">
+                <div className="text-sm font-semibold truncate">{BRAND_NAME} Jobs</div>
+                <div className="text-xs text-muted-foreground truncate">Logistics • Transport • Supply Chain</div>
+              </div> */}
             </Link>
             <div className="flex items-center gap-2">
+              <ThemeToggle />
               {session ? (
                 <>
                   <Link href="/dashboard/jobs">
@@ -1312,37 +1535,121 @@ export function JobsBoardClient({
 
       <main className={(embedded ? "w-full" : "w-full px-4 py-6") + " overflow-x-hidden"}>
         <div className={embedded ? "w-full" : "mx-auto w-full max-w-[1500px]"}>
-        <Card className="shadow-sm bg-[#F3F0FF] border-0">
-          <CardBody className="pt-6">
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_320px_240px_160px]">
+        <Card className="shadow-sm">
+          <CardBody className="pt-4 pb-4">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(320px,520px)_minmax(260px,340px)_minmax(220px,260px)_160px]">
               <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={draftQ}
-                  onChange={(e) => setDraftQ(e.target.value)}
-                  placeholder="Search by role, company, skill or department"
-                  className="pl-9 h-12 rounded-full bg-white shadow-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") applySearch()
-                  }}
-                />
+                <div className="h-12 rounded-full border border-input/70 bg-card/60 px-4 py-2 shadow-sm shadow-black/20 focus-within:ring-2 focus-within:ring-ring/30">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+
+                    {draftTextTokens.slice(0, 2).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => removeDraftTextToken(t)}
+                        className="inline-flex shrink-0 items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
+                      >
+                        <span className="max-w-[140px] truncate">{t}</span>
+                        <span className="text-muted-foreground">×</span>
+                      </button>
+                    ))}
+
+                    {draftTextTokens.length > 2 ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectionModalOpen(true)}
+                        className="inline-flex shrink-0 items-center rounded-full border bg-background px-3 py-1 text-xs font-medium"
+                      >
+                        +{draftTextTokens.length - 2}
+                      </button>
+                    ) : null}
+
+                    <input
+                      value={draftQ}
+                      onChange={(e) => setDraftQ(e.target.value)}
+                      onFocus={() => setQFocused(true)}
+                      onBlur={() => {
+                        window.setTimeout(() => setQFocused(false), 120)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === ",") {
+                          e.preventDefault()
+                          addDraftTextToken(draftQ)
+                        }
+                        if (e.key === "Backspace" && !draftQ.trim() && draftTextTokens.length) {
+                          removeDraftTextToken(draftTextTokens[draftTextTokens.length - 1])
+                        }
+                      }}
+                      placeholder={draftTextTokens.length ? "Add another…" : "Role, company, skill…"}
+                      className="min-w-[120px] flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {qFocused || draftQ.trim() ? (
+                  <div className="absolute left-0 right-0 top-full z-50 mt-2 max-h-[320px] overflow-auto rounded-2xl border border-border/60 bg-popover shadow-lg shadow-black/10 dark:shadow-black/40">
+                    {draftQ.trim() ? (
+                      <button
+                        type="button"
+                        onClick={() => applySearch()}
+                        className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-accent"
+                      >
+                        <span className="truncate">Search for “{draftQ.trim()}”</span>
+                        <span className="text-xs text-muted-foreground">Search</span>
+                      </button>
+                    ) : (
+                      <div className="px-4 py-3 text-xs font-medium text-muted-foreground">Popular searches</div>
+                    )}
+
+                    {draftQ.trim().length >= 2 && qSuggestBusy ? (
+                      <div className="px-4 py-3 text-sm text-muted-foreground">Searching…</div>
+                    ) : null}
+
+                    {mergedQSuggestions.length ? (
+                      mergedQSuggestions.map((opt) => (
+                        <button
+                          key={`qopt:${opt}`}
+                          type="button"
+                          onClick={() => addDraftTextToken(opt)}
+                          className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-accent"
+                        >
+                          <span className="truncate">{opt}</span>
+                          <span className="text-xs text-muted-foreground">Add</span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="px-4 py-3 text-sm text-muted-foreground">No suggestions</div>
+                    )}
+                  </div>
+                ) : null}
               </div>
 
               <div className="grid gap-2">
                 <div className="relative">
-                  <div className="h-12 rounded-full border border-input bg-white px-4 py-2 shadow-sm focus-within:ring-2 focus-within:ring-ring/20">
-                    <div className="flex flex-wrap items-center gap-2">
-                    {draftSkills.map((s) => (
+                  <div className="h-12 rounded-full border border-input/70 bg-card/60 px-4 py-2 shadow-sm shadow-black/20 focus-within:ring-2 focus-within:ring-ring/30">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                    {draftSkills.slice(0, 1).map((s) => (
                       <button
                         key={s}
                         type="button"
                         onClick={() => removeDraftSkill(s)}
-                        className="inline-flex items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
+                        className="inline-flex shrink-0 items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
                       >
                         <span className="max-w-[140px] truncate">{s}</span>
                         <span className="text-muted-foreground">×</span>
                       </button>
                     ))}
+
+                    {draftSkills.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectionModalOpen(true)}
+                        className="inline-flex shrink-0 items-center rounded-full border bg-background px-3 py-1 text-xs font-medium"
+                      >
+                        +{draftSkills.length - 1}
+                      </button>
+                    ) : null}
                     <input
                       value={draftSkillInput}
                       onChange={(e) => setDraftSkillInput(e.target.value)}
@@ -1356,14 +1663,25 @@ export function JobsBoardClient({
                           addDraftSkill(draftSkillInput)
                         }
                       }}
-                      placeholder={draftSkills.length ? "Add skill" : "Skills (optional)"}
-                      className="min-w-[120px] flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                      placeholder={draftSkills.length ? "Add another skill" : "e.g. Warehouse Mgmt, Excel, Tally"}
+                      className="min-w-[100px] flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
                     />
                     </div>
                   </div>
 
-                  {skillFocused && draftSkillInput.trim() && skillTypeahead.length ? (
-                    <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-2xl border bg-white shadow-lg">
+                  {skillFocused || draftSkillInput.trim() ? (
+                    <div className="absolute left-0 right-0 top-full z-50 mt-2 max-h-[320px] overflow-auto rounded-2xl border border-border/60 bg-popover shadow-lg shadow-black/10 dark:shadow-black/40">
+                      {draftSkillInput.trim() && !draftSkills.some((s) => s.toLowerCase() === draftSkillInput.trim().toLowerCase()) ? (
+                        <button
+                          type="button"
+                          onClick={() => addDraftSkill(draftSkillInput)}
+                          className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-accent"
+                        >
+                          <span className="truncate">Add “{draftSkillInput.trim()}”</span>
+                          <span className="text-xs text-muted-foreground">Add</span>
+                        </button>
+                      ) : null}
+
                       {skillTypeahead.map((opt) => (
                         <button
                           key={`skillopt:${opt}`}
@@ -1381,24 +1699,72 @@ export function JobsBoardClient({
               </div>
 
               <div className="relative">
-                <Input
-                  value={draftLocation}
-                  onChange={(e) => setDraftLocation(e.target.value)}
-                  onFocus={() => setLocationFocused(true)}
-                  onBlur={() => {
-                    window.setTimeout(() => setLocationFocused(false), 120)
-                  }}
-                  placeholder={locationPlaceholder}
-                  className="h-12 rounded-full bg-white shadow-sm"
-                />
+                <div className="h-12 rounded-full border border-input/70 bg-card/60 px-4 py-2 shadow-sm shadow-black/20 focus-within:ring-2 focus-within:ring-ring/30">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
 
-                {locationFocused && draftLocation.trim() && locationTypeahead.length ? (
-                  <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-2xl border bg-white shadow-lg">
+                    {draftLocationTokens.slice(0, 1).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => removeDraftLocationToken(t)}
+                        className="inline-flex shrink-0 items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
+                      >
+                        <span className="max-w-[140px] truncate">{t}</span>
+                        <span className="text-muted-foreground">×</span>
+                      </button>
+                    ))}
+
+                    {draftLocationTokens.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectionModalOpen(true)}
+                        className="inline-flex shrink-0 items-center rounded-full border bg-background px-3 py-1 text-xs font-medium"
+                      >
+                        +{draftLocationTokens.length - 1}
+                      </button>
+                    ) : null}
+
+                    <input
+                      value={draftLocation}
+                      onChange={(e) => setDraftLocation(e.target.value)}
+                      onFocus={() => setLocationFocused(true)}
+                      onBlur={() => {
+                        window.setTimeout(() => setLocationFocused(false), 120)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === ",") {
+                          e.preventDefault()
+                          addDraftLocationToken(draftLocation)
+                        }
+                        if (e.key === "Backspace" && !draftLocation.trim() && draftLocationTokens.length) {
+                          removeDraftLocationToken(draftLocationTokens[draftLocationTokens.length - 1])
+                        }
+                      }}
+                      placeholder={draftLocationTokens.length ? "Add location" : locationPlaceholder}
+                      className="min-w-[100px] flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {locationFocused || draftLocation.trim() ? (
+                  <div className="absolute left-0 right-0 top-full z-50 mt-2 max-h-[320px] overflow-auto rounded-2xl border border-border/60 bg-popover shadow-lg shadow-black/10 dark:shadow-black/40">
+                    {draftLocation.trim() && !LOCATION_PRESETS.some((x) => x.toLowerCase() === draftLocation.trim().toLowerCase()) ? (
+                      <button
+                        type="button"
+                        onClick={() => addDraftLocationToken(draftLocation.trim())}
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm hover:bg-accent"
+                      >
+                        <MapPin className="h-4 w-4 text-muted-foreground" />
+                        <span className="truncate">Add “{draftLocation.trim()}”</span>
+                      </button>
+                    ) : null}
+
                     {locationTypeahead.map((opt) => (
                       <button
                         key={`locopt:${opt}`}
                         type="button"
-                        onClick={() => setDraftLocation(opt)}
+                        onClick={() => addDraftLocationToken(opt)}
                         className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm hover:bg-accent"
                       >
                         <MapPin className="h-4 w-4 text-muted-foreground" />
@@ -1413,7 +1779,7 @@ export function JobsBoardClient({
                 size="lg"
                 variant={draftHasMeaningfulSearch ? "primary" : "secondary"}
                 className="rounded-full h-12"
-                onClick={applySearch}
+                onClick={() => applySearch()}
               >
                 Search jobs
               </Button>
@@ -1422,25 +1788,127 @@ export function JobsBoardClient({
           </CardBody>
         </Card>
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm sm:text-base font-semibold">Showing {resultsJobs.length} jobs</div>
-          <div className="flex items-center gap-2">
-            {!session ? (
-              <select
-                value={draftSort}
-                onChange={(e) => applySort(e.target.value)}
-                className="h-9 rounded-xl border border-input bg-background px-3 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/20"
+        <Modal open={selectionModalOpen} onClose={() => setSelectionModalOpen(false)} title="Selected filters" size="md">
+          <div className="grid gap-5">
+            <div>
+              <div className="text-sm font-semibold">Search terms</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {draftTextTokens.length ? (
+                  draftTextTokens.map((t) => (
+                    <button
+                      key={`sel:q:${t}`}
+                      type="button"
+                      onClick={() => removeDraftTextToken(t)}
+                      className="inline-flex items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
+                    >
+                      <span className="max-w-[220px] truncate">{t}</span>
+                      <span className="text-muted-foreground">×</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No search terms selected.</div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-sm font-semibold">Skills</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {draftSkills.length ? (
+                  draftSkills.map((t) => (
+                    <button
+                      key={`sel:skill:${t}`}
+                      type="button"
+                      onClick={() => removeDraftSkill(t)}
+                      className="inline-flex items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
+                    >
+                      <span className="max-w-[220px] truncate">{t}</span>
+                      <span className="text-muted-foreground">×</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No skills selected.</div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-sm font-semibold">Locations</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {draftLocationTokens.length ? (
+                  draftLocationTokens.map((t) => (
+                    <button
+                      key={`sel:loc:${t}`}
+                      type="button"
+                      onClick={() => removeDraftLocationToken(t)}
+                      className="inline-flex items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
+                    >
+                      <span className="max-w-[220px] truncate">{t}</span>
+                      <span className="text-muted-foreground">×</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">Anywhere in India.</div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                className="h-11 flex-1 rounded-2xl"
+                onClick={() => {
+                  setDraftTextTokens([])
+                  setDraftSkills([])
+                  setDraftSkillInput("")
+                  setDraftLocationTokens([])
+                  setDraftLocation("")
+                  setDraftQ("")
+                }}
               >
-                <option value="recent">Most recent</option>
-                
-              </select>
-            ) : null}
-            <div className="lg:hidden">
-              <Button variant="secondary" size="sm" onClick={() => setFiltersOpen(true)} className="gap-2 rounded-xl">
+                Clear all
+              </Button>
+              <Button
+                className="h-11 flex-1 rounded-2xl"
+                onClick={() => {
+                  setSelectionModalOpen(false)
+                  applySearch()
+                }}
+              >
+                Search jobs
+              </Button>
+            </div>
+          </div>
+        </Modal>
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm sm:text-base font-semibold text-foreground">Showing {resultsJobs.length} jobs</div>
+          <div className="flex items-center gap-2">
+            <div className="lg:hidden flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setSortModalOpen(true)} className="gap-2 rounded-xl">
+                <SlidersHorizontal className="h-4 w-4" />
+                Sort
+              </Button>
+              <Button 
+                variant="secondary" 
+                size="sm" 
+                onClick={() => setFiltersOpen(true)} 
+                className="gap-2 rounded-xl"
+              >
                 <Filter className="h-4 w-4" />
                 Filters
               </Button>
             </div>
+            {!session ? (
+              <select
+                value={draftSort}
+                onChange={(e) => applySort(e.target.value)}
+                className="hidden h-9 rounded-xl border border-input/70 bg-card/60 px-3 text-sm text-foreground shadow-sm shadow-black/20 focus:outline-none focus:ring-2 focus:ring-ring/30 lg:block"
+              >
+                <option value="recent">Most recent</option>
+                <option value="relevant">Most relevant</option>
+              </select>
+            ) : null}
             {activeChips.length ? (
               <Button variant="secondary" size="sm" className="rounded-xl" onClick={clearAll}>
                 Clear filters
@@ -1449,18 +1917,52 @@ export function JobsBoardClient({
           </div>
         </div>
 
+        <div className="mt-3 flex items-center justify-between gap-3 sm:hidden">
+          {resultsUsedProfileFallback ? (
+            <div className="flex-1 rounded-2xl border border-border/60 bg-warning/15 px-3 py-2 text-xs text-warning">
+              No matches for your profile roles. Showing all jobs.
+            </div>
+          ) : (
+            <div className="flex-1" />
+          )}
+          <div className="inline-flex rounded-full border border-border/60 bg-card/60 p-1 shadow-sm shadow-black/20">
+            <button
+              type="button"
+              onClick={() => setViewMode("detailed")}
+              className={[
+                "flex items-center justify-center rounded-full px-2 py-1",
+                viewMode === "detailed" ? "bg-primary text-primary-foreground" : "text-muted-foreground"
+              ].join(" ")}
+              aria-label="Detailed view"
+            >
+              <List className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("compact")}
+              className={[
+                "flex items-center justify-center rounded-full px-2 py-1",
+                viewMode === "compact" ? "bg-primary text-primary-foreground" : "text-muted-foreground"
+              ].join(" ")}
+              aria-label="Compact view"
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
         {activeChips.length ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             {activeChips.map((c) => (
               <button
                 key={`${c.key}:${c.value}`}
                 type="button"
                 onClick={() => removeChip(c.key)}
-                className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs text-foreground hover:bg-accent"
+                className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs text-foreground/80 hover:bg-accent/60 transition-all duration-200 shadow-sm shadow-black/20"
               >
-                <span className="text-muted-foreground">{c.label}:</span>
-                <span className="max-w-[220px] truncate">{c.value}</span>
-                <span className="text-muted-foreground">×</span>
+                <span className="text-muted-foreground font-medium">{c.label}:</span>
+                <span className="max-w-[220px] truncate font-medium">{c.value}</span>
+                <span className="text-muted-foreground hover:text-foreground">×</span>
               </button>
             ))}
           </div>
@@ -1484,18 +1986,25 @@ export function JobsBoardClient({
 
           <div className="grid min-w-0 gap-3">
             {!session ? (
-              <Card className="border-dashed">
-                <CardBody className="pt-6">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <div className="text-base font-semibold">Know more about latest logistics jobs</div>
-                      <div className="mt-1 text-sm text-muted-foreground">Create a profile to get a tailored feed and easy apply.</div>
+              <Card className="rounded-2xl border-border/60 bg-gradient-to-br from-panel/60 to-background shadow-sm shadow-black/20">
+                <CardBody className="p-6">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-lg font-semibold text-foreground">India’s Fastest Growing Logistics Hiring Platform</div>
+                      <div className="mt-1 text-sm text-muted-foreground">Create your profile in 60 seconds. Get hired faster.</div>
                     </div>
-                    <div className="flex gap-2">
-                      <Button variant="secondary" className="rounded-xl" onClick={() => openAuth("login")}>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <Button 
+                        variant="secondary" 
+                        className="rounded-xl font-medium"
+                        onClick={() => openAuth("login")}
+                      >
                         Log in
                       </Button>
-                      <Button className="rounded-xl" onClick={() => openAuth("create")}>
+                      <Button 
+                        className="rounded-xl font-medium"
+                        onClick={() => openAuth("create")}
+                      >
                         Create profile
                       </Button>
                     </div>
@@ -1510,7 +2019,7 @@ export function JobsBoardClient({
                     <div className="text-sm font-semibold">Couldn’t load jobs</div>
                     <div className="text-sm text-muted-foreground">{resultsError}</div>
                     <div>
-                      <Button variant="secondary" className="rounded-xl" onClick={() => fetchJobsPage({ append: false, cursor: null })}>
+                      <Button variant="secondary" className="rounded-xl" onClick={() => fetchJobsPage()}>
                         Retry
                       </Button>
                     </div>
@@ -1557,127 +2066,264 @@ export function JobsBoardClient({
                 const loc = String(job.location || "").trim()
                 const place = [city, loc].filter(Boolean).join(", ") || "India"
                 const isExternal = String((job as any).apply_type || "in_platform") === "external"
+                const createdAtMs = job.created_at ? new Date(job.created_at).getTime() : 0
+                const isNew = Boolean(createdAtMs) && Date.now() - createdAtMs <= 15 * 24 * 60 * 60 * 1000
+                const jobHref = embedded ? `/dashboard/jobs/${job.id}` : `/jobs/${job.id}`
+                const hasSkills = Boolean((job as any).skills_must_have?.length || (job as any).skills_good_to_have?.length)
+                const isApplied = appliedJobIdSet.has(String(job.id))
+
+                const isHighlighted = sp.get("highlightJobId") === String(job.id)
+                const isNavigating = navigatingJobId === String(job.id)
 
                 return (
-                  <Card key={job.id} className="rounded-3xl border bg-white shadow-sm hover:shadow-md transition-shadow">
-                    <CardBody className="py-6">
-                      <div className="grid gap-4 sm:grid-cols-[64px_1fr_auto] sm:items-start">
-                        <div className="grid gap-2">
+                  <Card
+                    key={job.id}
+                    className={[
+                      "group relative overflow-hidden rounded-2xl border bg-card shadow-sm shadow-black/20 transition-colors duration-150 hover:bg-card/90 hover:shadow-md hover:shadow-black/30 cursor-pointer",
+                      isHighlighted ? "border-primary ring-2 ring-primary/20" : "border-border/60"
+                    ].join(" ")}
+                    id={isHighlighted ? `job-${job.id}` : undefined}
+                    onClick={() => {
+                      try {
+                        window.sessionStorage.setItem(scrollKey, String(window.scrollY || 0))
+                      } catch {}
+                      setNavigatingJobId(String(job.id))
+                      router.push(jobHref)
+                    }}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-success/10 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                    <CardBody className="relative p-5">
+                      <div className="flex items-start gap-4">
+                        <div className="relative flex-shrink-0">
                           {companyHref ? (
-                            <Link href={companyHref} target="_blank" rel="noopener noreferrer" className="inline-flex">
+                            <Link 
+                              href={companyHref} 
+                              className="inline-flex z-10 relative"
+                              onClick={(e) => e.stopPropagation()}
+                            >
                               {logoUrl ? (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img src={logoUrl} alt={companyName} className="h-16 w-16 rounded-2xl border bg-background object-contain p-1" />
+                                <img src={logoUrl} alt={companyName} className="h-14 w-14 rounded-xl border border-border/60 bg-card object-contain p-2 shadow-sm shadow-black/20 transition-transform duration-300 group-hover:scale-105" />
                               ) : (
-                                <div className="h-16 w-16 rounded-2xl border bg-background flex items-center justify-center text-muted-foreground">
-                                  <Building2 className="h-6 w-6" />
+                                <div className="h-14 w-14 rounded-xl border border-border/60 bg-accent/60 flex items-center justify-center text-muted-foreground shadow-sm shadow-black/20">
+                                  <Building2 className="h-5 w-5" />
                                 </div>
                               )}
                             </Link>
                           ) : logoUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={logoUrl} alt={companyName} className="h-16 w-16 rounded-2xl border bg-background object-contain p-1" />
+                            <img src={logoUrl} alt={companyName} className="h-14 w-14 rounded-xl border border-border/60 bg-card object-contain p-2 shadow-sm shadow-black/20 transition-transform duration-300 group-hover:scale-105" />
                           ) : (
-                            <div className="h-16 w-16 rounded-2xl border bg-background flex items-center justify-center text-muted-foreground">
-                              <Building2 className="h-6 w-6" />
+                            <div className="h-14 w-14 rounded-xl border border-border/60 bg-accent/60 flex items-center justify-center text-muted-foreground shadow-sm shadow-black/20">
+                              <Building2 className="h-5 w-5" />
                             </div>
                           )}
                         </div>
 
-                        <div className="min-w-0">
-                          <Link
-                            href={`/jobs/${job.id}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={() => {
-                              try {
-                                window.sessionStorage.setItem(scrollKey, String(window.scrollY || 0))
-                              } catch {}
-                            }}
-                            className="block text-base sm:text-lg font-semibold leading-tight hover:underline hover:underline-offset-4"
-                          >
-                            {job.title}
-                          </Link>
-                          {companyHref ? (
-                            <Link
-                              href={companyHref}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="mt-1 block text-sm text-muted-foreground truncate hover:text-foreground"
-                            >
-                              {companyName}
-                            </Link>
-                          ) : (
-                            <div className="mt-1 text-sm text-muted-foreground truncate">{companyName}</div>
-                          )}
-
-                          <div className="mt-3 grid gap-2 text-sm">
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-muted-foreground">
-                              <span className="inline-flex items-center gap-2">
-                                <MapPin className="h-4 w-4" />
-                                <span className="truncate">{place}</span>
-                              </span>
-                              <span className="inline-flex items-center gap-2">
-                                <Briefcase className="h-4 w-4" />
-                                <span>{(job as any).employment_type ? formatEnum((job as any).employment_type) : "Job"}</span>
-                              </span>
-                              <span className="font-medium text-foreground">{formatSalary(job)}</span>
-                            </div>
-
-                            <div className="flex flex-wrap gap-2">
-                              {(job as any).shift_type ? <Badge>{formatEnum((job as any).shift_type)}</Badge> : null}
-                              {(job as any).department_category ? <Badge>{formatEnum((job as any).department_category)}</Badge> : null}
-                              {isExternal ? <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">Company site</Badge> : <Badge className="bg-blue-50 text-blue-700 border-blue-200">Easy apply</Badge>}
-                            </div>
-
-                            {!session ? (
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                <Button variant="secondary" size="sm" className="rounded-xl" onClick={() => openAuth("login")}>
-                                  Log in
-                                </Button>
-                                <Button size="sm" className="rounded-xl" onClick={() => openAuth("create")}>
-                                  Create profile
-                                </Button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0 flex-1">
+                              <div className="block text-lg font-semibold leading-tight text-foreground hover:text-primary transition-colors duration-200">
+                                {job.title}
                               </div>
-                            ) : null}
+                              {companyHref ? (
+                                <Link
+                                  href={companyHref}
+                                  className="mt-1 block text-sm font-medium text-muted-foreground hover:text-foreground transition-colors duration-200 truncate z-10 relative"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {companyName}
+                                </Link>
+                              ) : (
+                                <div className="mt-1 text-sm font-medium text-muted-foreground truncate">{companyName}</div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground font-medium">
+                              <span>{formatRelativeTime(job.created_at)}</span>
+                              {isApplied ? (
+                                <Badge className="bg-accent/60 text-foreground/90 text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm shadow-black/20">
+                                  Applied
+                                </Badge>
+                              ) : null}
+                              {isNew ? (
+                                <Badge className="bg-primary text-primary-foreground text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm shadow-black/20">
+                                  New
+                                </Badge>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+                            <span className="inline-flex items-center gap-2 text-muted-foreground">
+                              <MapPin className="h-4 w-4 text-muted-foreground" />
+                              <span className="truncate font-medium">{place}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-2 text-muted-foreground">
+                              <Briefcase className="h-4 w-4 text-muted-foreground" />
+                              <span className="font-medium">{(job as any).employment_type ? formatEnum((job as any).employment_type) : "Job"}</span>
+                            </span>
+                            <span className="font-semibold text-foreground">{formatSalary(job)}</span>
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {(job as any).shift_type && (
+                              <Badge className="bg-accent/60 text-foreground/80 border-border/60 font-medium">
+                                {formatEnum((job as any).shift_type)}
+                              </Badge>
+                            )}
+                            {(job as any).department_category && (
+                              <Badge className="bg-accent/60 text-foreground/80 border-border/60 font-medium">
+                                {formatEnum((job as any).department_category)}
+                              </Badge>
+                            )}
+                            {isExternal ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  startExternalApply(job)
+                                }}
+                                className="inline-flex"
+                              >
+                                <Badge className="bg-success/15 text-success border-border/60 font-medium">
+                                  Company site
+                                </Badge>
+                              </button>
+                            ) : (
+                              <Badge className="bg-primary/15 text-primary border-border/60 font-medium">
+                                Easy apply
+                              </Badge>
+                            )}
                           </div>
                         </div>
-
-                        <div className="flex items-center justify-between gap-3 sm:flex-col sm:items-end">
-                          <Link
-                            href={`/jobs/${job.id}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={() => {
-                              try {
-                                window.sessionStorage.setItem(scrollKey, String(window.scrollY || 0))
-                              } catch {}
-                            }}
-                            className="w-full sm:w-auto"
-                          >
-                            <Button variant="secondary" size="sm" className="rounded-xl w-full sm:w-auto">
-                              View
-                            </Button>
-                          </Link>
-                          <div className="text-xs text-muted-foreground">{formatRelativeTime(job.created_at)}</div>
-                        </div>
                       </div>
+
+                          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              {(job as any).view_count ? (
+                                <span className="text-muted-foreground font-medium">{(job as any).view_count} views</span>
+                              ) : null}
+                              {hasSkills ? <span className="text-xs font-medium text-muted-foreground">Skills:</span> : null}
+                              {viewMode === "detailed"
+                                ? (job as any).skills_must_have?.slice(0, 2).map((skill: string) => (
+                                <button
+                                  key={skill}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    try {
+                                      window.sessionStorage.setItem(scrollKey, String(window.scrollY || 0))
+                                    } catch {}
+                                    setNavigatingJobId(String(job.id))
+                                    router.push(jobHref)
+                                  }}
+                                  className="inline-flex items-center rounded-full border border-border/60 bg-success/15 px-2 py-1 text-xs font-medium text-success hover:bg-success/20 transition-colors duration-200"
+                                >
+                                  {skill}
+                                </button>
+                              ))
+                                : null}
+                              {viewMode === "detailed"
+                                ? (job as any).skills_good_to_have?.slice(0, 1).map((skill: string) => (
+                                <button
+                                  key={skill}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    try {
+                                      window.sessionStorage.setItem(scrollKey, String(window.scrollY || 0))
+                                    } catch {}
+                                    setNavigatingJobId(String(job.id))
+                                    router.push(jobHref)
+                                  }}
+                                  className="inline-flex items-center rounded-full border border-border/60 bg-accent/60 px-2 py-1 text-xs font-medium text-foreground/80 hover:bg-accent/80 transition-colors duration-200"
+                                >
+                                  {skill}
+                                </button>
+                              ))
+                                : null}
+                              {viewMode === "detailed" &&
+                                ((job as any).skills_must_have?.length > 2 || (job as any).skills_good_to_have?.length > 1) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    try {
+                                      window.sessionStorage.setItem(scrollKey, String(window.scrollY || 0))
+                                    } catch {}
+                                    setNavigatingJobId(String(job.id))
+                                    router.push(jobHref)
+                                  }}
+                                  className="text-xs text-muted-foreground hover:text-foreground hover:underline transition-colors duration-200"
+                                >
+                                  +{Math.max(
+                                    0,
+                                    ((job as any).skills_must_have?.length - 2 || 0) + ((job as any).skills_good_to_have?.length - 1 || 0)
+                                  )}{" "}
+                                  more
+                                </button>
+                              )}
+                            </div>
+                            <Link
+                              href={jobHref}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                try {
+                                  window.sessionStorage.setItem(scrollKey, String(window.scrollY || 0))
+                                } catch {}
+                                setNavigatingJobId(String(job.id))
+                              }}
+                              className="inline-flex"
+                            >
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                className={[
+                                  "rounded-full transition-all duration-200 group-hover:shadow-md h-9 px-4 text-xs",
+                                  isApplied
+                                    ? "bg-accent/60 text-foreground hover:bg-accent/80"
+                                    : "bg-primary text-primary-foreground hover:bg-primary/90",
+                                  isNavigating ? "opacity-70 cursor-wait" : ""
+                                ].join(" ")}
+                              >
+                                {isNavigating ? "Opening…" : isApplied ? "View applied" : "View"}
+                                <ArrowRight className="ml-1 h-3 w-3 transition-transform duration-200 group-hover:translate-x-0.5" />
+                              </Button>
+                            </Link>
+                          </div>
                     </CardBody>
                   </Card>
                 )
               })}
-              {resultsNextCursor ? (
-                <div className="pt-2">
+              <div className="pt-6">
+                <div className="flex items-center justify-center gap-2">
                   <Button
                     variant="secondary"
-                    className="w-full rounded-xl"
-                    onClick={loadMore}
-                    disabled={resultsLoadingMore}
+                    className="rounded-xl"
+                    disabled={resultsLoading || appliedPage <= 1}
+                    onClick={() => {
+                      const next = new URLSearchParams(sp.toString())
+                      next.set("page", String(Math.max(1, appliedPage - 1)))
+                      router.push(`${pathname}?${next.toString()}`)
+                    }}
                   >
-                    {resultsLoadingMore ? "Loading…" : "Load more"}
+                    Previous
+                  </Button>
+                  <div className="text-sm font-medium text-muted-foreground bg-accent/60 rounded-lg px-3 py-1.5">
+                    Page {appliedPage}
+                  </div>
+                  <Button
+                    variant="secondary"
+                    className="rounded-xl"
+                    disabled={resultsLoading || !resultsHasMore}
+                    onClick={() => {
+                      const next = new URLSearchParams(sp.toString())
+                      next.set("page", String(appliedPage + 1))
+                      router.push(`${pathname}?${next.toString()}`)
+                    }}
+                  >
+                    Next
                   </Button>
                 </div>
-              ) : null}
+                <div className="mt-3 text-center text-xs text-muted-foreground font-medium">15 jobs per page</div>
+              </div>
               </>
             )}
           </div>
@@ -1685,12 +2331,12 @@ export function JobsBoardClient({
           {session ? (
           <div className="grid gap-4 w-full min-w-0 justify-self-end">
             <div className="sticky top-24">
-              <Card>
-                <CardBody className="pt-6">
+              <Card className="rounded-2xl border-border/60 bg-card/60 backdrop-blur-sm shadow-sm shadow-black/20">
+                <CardBody className="p-6">
                   {session ? (
-                    <div className="grid gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 overflow-hidden rounded-full border bg-primary/5 flex items-center justify-center font-semibold">
+                    <div className="grid gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className="relative h-12 w-12 overflow-hidden rounded-full border border-border/60 shadow-lg shadow-black/30">
                           {candidateAvatarUrl || googleAvatarUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
@@ -1699,37 +2345,58 @@ export function JobsBoardClient({
                               className="h-full w-full object-cover"
                             />
                           ) : (
-                            <span>{String(candidate?.name || "U").trim().slice(0, 1).toUpperCase()}</span>
+                            <div className="h-full w-full bg-gradient-to-br from-accent/60 to-card flex items-center justify-center font-semibold text-muted-foreground">
+                              {String(candidate?.name || "U").trim().slice(0, 1).toUpperCase()}
+                            </div>
                           )}
                         </div>
-                        <div className="min-w-0">
-                          <div className="font-semibold truncate">{candidate?.name || "Your profile"}</div>
-                          <div className="text-xs text-muted-foreground truncate">{candidate?.email || ""}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-foreground truncate">{candidate?.name || "Your profile"}</div>
+                          <div className="text-sm text-muted-foreground truncate">{candidate?.email || ""}</div>
                         </div>
-                        
                       </div>
                       <Link href="/dashboard/profile" className="w-full">
-                        <Button variant="secondary" className="w-full rounded-xl">
+                        <Button 
+                          variant="secondary" 
+                          className="w-full rounded-xl font-medium"
+                        >
                           Update profile
                         </Button>
                       </Link>
-                      {candidateLoading ? <div className="text-xs text-muted-foreground">Loading profile…</div> : null}
+                      {candidateLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <div className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-pulse" />
+                          Loading profile…
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
-                    <div className="grid gap-3">
-                      <div className="rounded-2xl border bg-accent p-4">
-                        <div className="font-semibold">Know more about latest logistics jobs</div>
-                        <div className="mt-1 text-sm text-muted-foreground">Create a profile to get a tailored feed and easy apply.</div>
+                    <div className="grid gap-4">
+                      <div className="rounded-xl bg-gradient-to-br from-panel/60 to-card border border-border/60 p-4">
+                        <div className="font-semibold text-foreground">India’s Fastest Growing Logistics Hiring Platform</div>
+                        <div className="mt-1 text-sm text-muted-foreground">Create your profile in 60 seconds. Get hired faster.</div>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <Button variant="secondary" className="w-full rounded-xl" onClick={() => openAuth("login")}>
+                        <Button 
+                          variant="secondary" 
+                          className="w-full rounded-xl font-medium"
+                          onClick={() => openAuth("login")}
+                        >
                           Log in
                         </Button>
-                        <Button className="w-full rounded-xl" onClick={() => openAuth("create")}>
+                        <Button 
+                          className="w-full rounded-xl font-medium"
+                          onClick={() => openAuth("create")}
+                        >
                           Create profile
                         </Button>
                       </div>
-                      {sessionLoading ? <div className="text-xs text-muted-foreground">Checking session…</div> : null}
+                      {sessionLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <div className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-pulse" />
+                          Checking session…
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </CardBody>
@@ -1760,13 +2427,13 @@ export function JobsBoardClient({
                             onClick={() => (profileRoleFilterOn ? disableProfileRoleFilter() : enableProfileRoleFilter())}
                             className={
                               "inline-flex h-8 w-14 items-center rounded-full border px-1 transition-colors " +
-                              (profileRoleFilterOn ? "bg-emerald-600 border-emerald-600" : "bg-muted border-input")
+                              (profileRoleFilterOn ? "bg-primary border-primary" : "bg-muted border-input")
                             }
                             aria-label="Toggle profile role filtering"
                           >
                             <span
                               className={
-                                "h-6 w-6 rounded-full bg-white shadow transition-transform " +
+                                "h-6 w-6 rounded-full bg-background shadow transition-transform " +
                                 (profileRoleFilterOn ? "translate-x-6" : "translate-x-0")
                               }
                             />
@@ -1775,11 +2442,11 @@ export function JobsBoardClient({
                       </div>
                     ) : null}
 
-                    {resultsUsedProfileFallback ? (
-                      <div className="rounded-2xl border bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        No matches for your profile roles. Showing all jobs.
-                      </div>
-                    ) : null}
+                  {resultsUsedProfileFallback ? (
+                    <div className="hidden md:block rounded-2xl border border-border/60 bg-warning/15 px-4 py-3 text-sm text-warning">
+                      No matches for your profile roles. Showing all jobs.
+                    </div>
+                  ) : null}
                   </div>
                 </CardBody>
               </Card>
@@ -1805,7 +2472,7 @@ export function JobsBoardClient({
                             if (!session || prefsBusy) return
                             openRoleModal()
                           }}
-                          className="text-sm font-semibold text-emerald-700"
+                          className="text-sm font-semibold text-primary"
                         >
                           Edit
                         </button>
@@ -1877,9 +2544,69 @@ export function JobsBoardClient({
           ) : null}
         </div>
 
-        <Modal open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filters">
+        <Modal open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filters" variant="sheet">
           <div className="md:hidden">{MobileFiltersPanel}</div>
           <div className="hidden md:block">{FiltersPanel}</div>
+        </Modal>
+
+        <Modal open={sortModalOpen} onClose={() => setSortModalOpen(false)} title="Sort jobs" size="sm" variant="sheet">
+          <div className="grid gap-3">
+            <div className="text-sm text-muted-foreground mb-2">Sort by</div>
+            <div className="grid gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  applySort("recent")
+                  setSortModalOpen(false)
+                }}
+                className={`flex items-center justify-between rounded-xl border border-border/60 px-4 py-3 text-left transition-colors ${
+                  draftSort === "recent" 
+                    ? "bg-primary/15 text-primary" 
+                    : "bg-card/60 hover:bg-accent/60 text-foreground"
+                }`}
+              >
+                <div>
+                  <div className="font-medium">Most recent</div>
+                  <div className="text-sm text-muted-foreground">Newest jobs first</div>
+                </div>
+                {draftSort === "recent" && (
+                  <div className="h-2 w-2 rounded-full bg-primary" />
+                )}
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => {
+                  applySort("relevant")
+                  setSortModalOpen(false)
+                }}
+                className={`flex items-center justify-between rounded-xl border border-border/60 px-4 py-3 text-left transition-colors ${
+                  draftSort === "relevant" 
+                    ? "bg-primary/15 text-primary" 
+                    : "bg-card/60 hover:bg-accent/60 text-foreground"
+                }`}
+              >
+                <div>
+                  <div className="font-medium">Most relevant</div>
+                  <div className="text-sm text-muted-foreground">Based on your profile</div>
+                </div>
+                {draftSort === "relevant" && (
+                  <div className="h-2 w-2 rounded-full bg-primary" />
+                )}
+              </button>
+            </div>
+            
+            {session && (
+              <div className="mt-4 rounded-xl border border-border/60 bg-card/60 p-3">
+                <div className="text-sm font-medium text-foreground mb-1">Profile-based sorting</div>
+                <div className="text-xs text-muted-foreground">
+                  {draftSort === "relevant" 
+                    ? "Showing jobs that match your preferred title/role" 
+                    : "Showing all jobs sorted by posting date"}
+                </div>
+              </div>
+            )}
+          </div>
         </Modal>
 
         <Modal open={roleModalOpen} onClose={closeRoleModal} title="Preferred title/role">
@@ -1952,10 +2679,10 @@ export function JobsBoardClient({
                 {roleModalBusy ? <div className="text-xs text-muted-foreground">Generating…</div> : null}
               </div>
               {roleModalBusy ? (
-                <div className="rounded-2xl border bg-violet-50 p-3">
+                <div className="rounded-2xl border border-border/60 bg-primary/10 p-3">
                   <div className="grid grid-cols-2 gap-2">
                     {Array.from({ length: 8 }).map((_, i) => (
-                      <div key={i} className="h-9 rounded-full bg-violet-100 animate-pulse" />
+                      <div key={i} className="h-9 rounded-full bg-primary/15 animate-pulse" />
                     ))}
                   </div>
                 </div>
@@ -1980,7 +2707,7 @@ export function JobsBoardClient({
                           }}
                           className={
                             "rounded-full border px-3 py-1.5 text-xs " +
-                            (active ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-background text-muted-foreground hover:bg-accent")
+                            (active ? "bg-primary/15 text-primary border-border/60" : "bg-background text-muted-foreground hover:bg-accent")
                           }
                           disabled={prefsBusy}
                         >
@@ -2017,26 +2744,19 @@ export function JobsBoardClient({
           </div>
         </Modal>
 
-        <Modal open={authOpen} onClose={closeAuth} title={authMode === "create" ? "Create your profile" : "Log in"}>
-          {authMode === "create" ? (
-            <AuthStep
-              jobId="__create__"
-              returnTo={`/onboarding?returnTo=${encodeURIComponent("/dashboard/jobs")}`}
-              requireConsent
-              title="Create your profile"
-              description="Answer a few questions and upload your resume to unlock one‑tap apply."
-              onError={() => {}}
-            />
-          ) : (
-            <AuthStep
-              jobId="__login__"
-              returnTo="/dashboard/jobs"
-              requireConsent={false}
-              title="Log in"
-              description="Continue to your dashboard and saved profile."
-              onError={() => {}}
-            />
-          )}
+        <AuthModal open={authOpen} onClose={closeAuth} defaultMode={authMode === "login" ? "login" : "signup"} />
+        
+        <Modal open={!!didYouApplyJob} onClose={() => setDidYouApplyJob(null)} title="Did you apply?">
+          <div className="grid gap-4">
+             <p className="text-sm text-muted-foreground">
+               You were redirected to the company&apos;s website to apply for <strong>{didYouApplyJob?.title}</strong>.
+               Did you complete the application?
+             </p>
+             <div className="flex gap-3 justify-end">
+                <Button variant="secondary" onClick={() => handleDidYouApply(false)} disabled={didYouApplyBusy} className="rounded-xl">No, I didn&apos;t</Button>
+                <Button onClick={() => handleDidYouApply(true)} disabled={didYouApplyBusy} className="rounded-xl">Yes, I applied</Button>
+             </div>
+          </div>
         </Modal>
         </div>
       </main>

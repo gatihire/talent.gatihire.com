@@ -1,6 +1,6 @@
-# Truckinzy Board App – Product Overview (Non‑Technical)
+# GatiHire Board App – Product Overview (Non‑Technical)
 
-This document explains the candidate‑facing **Truckinzy Board App** in simple language so that non‑technical people can understand what the app does.
+This document explains the candidate‑facing **GatiHire Board App** in simple language so that non‑technical people can understand what the app does.
 
 If you also want the internal recruiter/admin view, see the internal repo:
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { getAuthedUser } from "@/lib/apiServerAuth"
+import { cache } from "@/lib/cache"
 
 export const runtime = "nodejs"
 
@@ -15,18 +16,34 @@ export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => null)) as any
   if (!body?.jobId) return NextResponse.json({ error: "Missing jobId" }, { status: 400 })
 
-  const { data: candidate, error: cErr } = await supabaseAdmin
+  let candidateResult = await supabaseAdmin
     .from("candidates")
-    .select("id,name,current_role,total_experience,location,file_url")
-    .or(`auth_user_id.eq.${user.id},email.eq.${user.email}`)
+    .select("id,name,email,phone,current_role,total_experience,location,file_url")
+    .eq("auth_user_id", user.id)
     .maybeSingle()
+  if (!candidateResult.data) {
+    const email = String(user.email || "").trim().toLowerCase()
+    if (email) {
+      candidateResult = await supabaseAdmin
+        .from("candidates")
+        .select("id,name,email,phone,current_role,total_experience,location,file_url")
+        .eq("email", email)
+        .maybeSingle()
+    }
+  }
 
+  const { data: candidate, error: cErr } = candidateResult
   if (cErr) return NextResponse.json({ error: "Failed to load candidate" }, { status: 500 })
   if (!candidate?.id) return NextResponse.json({ error: "Candidate profile not found" }, { status: 404 })
 
   if (!candidate.file_url) return NextResponse.json({ error: "Resume required" }, { status: 400 })
-  if (!candidate.name || !candidate.current_role || !candidate.total_experience || !candidate.location) {
+  const email = String((candidate as any)?.email || "").trim()
+  const phone = String((candidate as any)?.phone || "").trim()
+  if (!candidate.name || !candidate.current_role || !candidate.total_experience || !candidate.location || !email || !phone) {
     return NextResponse.json({ error: "Complete required profile fields" }, { status: 400 })
+  }
+  if (!/^\S+@\S+\.\S+$/.test(email)) {
+    return NextResponse.json({ error: "Invalid email" }, { status: 400 })
   }
 
   const notesParts: string[] = []
@@ -86,6 +103,9 @@ export async function POST(request: NextRequest) {
           .eq("job_id", body.jobId)
       }
 
+      await cache.del(`candidate:applications:${user.id}:all`)
+      await cache.del(`candidate:applications:${user.id}:${body.jobId}`)
+      await cache.del(`candidate:notifications:${user.id}`)
       return NextResponse.json({ success: true, existed: true, applicationId: existing?.id || null })
     }
 
@@ -138,5 +158,8 @@ export async function POST(request: NextRequest) {
     }
   })()
 
+  await cache.del(`candidate:applications:${user.id}:all`)
+  await cache.del(`candidate:applications:${user.id}:${body.jobId}`)
+  await cache.del(`candidate:notifications:${user.id}`)
   return NextResponse.json({ success: true, applicationId: insertedId })
 }

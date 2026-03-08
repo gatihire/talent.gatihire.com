@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { getAuthedUser } from "@/lib/apiServerAuth"
+import { cache } from "@/lib/cache"
 
 export const runtime = "nodejs"
 
@@ -19,11 +20,22 @@ export async function POST(request: NextRequest) {
   if (!jobId) return NextResponse.json({ error: "Missing jobId" }, { status: 400 })
   if (!redirectUrl) return NextResponse.json({ error: "Missing redirectUrl" }, { status: 400 })
 
-  const { data: candidate } = await supabaseAdmin
+  let candidateResult = await supabaseAdmin
     .from("candidates")
     .select("id")
-    .or(`auth_user_id.eq.${user.id},email.eq.${user.email}`)
+    .eq("auth_user_id", user.id)
     .maybeSingle()
+  if (!candidateResult.data) {
+    const email = String(user.email || "").trim().toLowerCase()
+    if (email) {
+      candidateResult = await supabaseAdmin
+        .from("candidates")
+        .select("id")
+        .eq("email", email)
+        .maybeSingle()
+    }
+  }
+  const candidate = candidateResult.data
 
   const ua = request.headers.get("user-agent")
   const referrer = typeof body?.referrer === "string" ? body.referrer : null
@@ -39,6 +51,7 @@ export async function POST(request: NextRequest) {
   })
 
   if (error) return NextResponse.json({ error: "Failed to record external apply" }, { status: 500 })
+  await cache.del(`candidate:applications:${user.id}:all`)
+  await cache.del(`candidate:applications:${user.id}:${jobId}`)
   return NextResponse.json({ success: true })
 }
-

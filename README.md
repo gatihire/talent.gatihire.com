@@ -1,4 +1,4 @@
-# Truckinzy Board App (Standalone)
+# GatiHire Board App (Standalone)
 
 Job board + candidate ATS flow (Next.js App Router) backed by Supabase (Auth + Postgres + Storage).
 

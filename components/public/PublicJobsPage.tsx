@@ -3,6 +3,7 @@ import { PublicTopNav } from "@/components/public/PublicTopNav"
 import { JobCard } from "@/components/jobs/JobCard"
 import { Pagination } from "@/components/jobs/Pagination"
 import { JobsFilters } from "@/components/jobs/JobsFilters"
+import { BRAND_NAME } from "@/lib/branding"
 
 type ClientLite = { id: string; name: string; slug: string | null; logo_url: string | null }
 
@@ -28,7 +29,7 @@ export function PublicJobsPage({
       <div className="bg-gradient-to-b from-[#F3F2FF] to-background">
         <div className="mx-auto max-w-6xl px-4 py-14">
           <div className="mx-auto max-w-3xl text-center">
-            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Truckinzy finds logistics jobs that work for you</h1>
+            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">{BRAND_NAME} finds logistics jobs that work for you</h1>
             <p className="mt-4 text-sm text-muted-foreground sm:text-base">
               Create a free profile to access jobs in fleet operations, dispatch, warehouse, supply chain, and more.
             </p>

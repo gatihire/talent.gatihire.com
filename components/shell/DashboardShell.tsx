@@ -8,8 +8,12 @@ import { supabase } from "@/lib/supabase"
 import { useSupabaseSession } from "@/lib/useSupabaseSession"
 import { bearerHeaders } from "@/lib/http"
 import { WorkAvailabilityModal } from "@/components/dashboard/WorkAvailabilityModal"
+import { ThemeToggle } from "@/components/theme/ThemeToggle"
+import { BRAND_LOGO_URL, BRAND_NAME } from "@/lib/branding"
 
 type NavItem = { label: string; href: string; active: (p: string) => boolean; comingSoon?: boolean }
+
+const SIDEBAR_COLLAPSED_KEY = "truckinzy:dashboardSidebarCollapsed"
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -20,8 +24,18 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
   const [availabilityOpen, setAvailabilityOpen] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false
+    try {
+      const v = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY)
+      if (v === null) return false
+      return v === "1"
+    } catch {
+      return false
+    }
+  })
   const [candidateName, setCandidateName] = useState<string>("")
+  const [candidateProfile, setCandidateProfile] = useState<any | null | undefined>(undefined)
   const [notifications, setNotifications] = useState<any[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [notifBusy, setNotifBusy] = useState(false)
@@ -41,22 +55,43 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!accessToken) {
       setCandidateName("")
+      setCandidateProfile(undefined)
       return
     }
     let active = true
-    fetch("/api/candidate/profile", { headers: bearerHeaders(accessToken) })
+    fetch("/api/candidate/profile?details=0", { headers: bearerHeaders(accessToken) })
       .then(async (r) => {
         const data = await r.json().catch(() => null)
         if (!active) return
         if (!r.ok) return
         const name = typeof data?.candidate?.name === "string" ? data.candidate.name : ""
         setCandidateName(name)
+        setCandidateProfile(data?.candidate || null)
       })
       .catch(() => {})
     return () => {
       active = false
     }
   }, [accessToken])
+
+  useEffect(() => {
+    if (!accessToken) return
+    if (candidateProfile === undefined) return
+
+    const hasResume = Boolean((candidateProfile as any)?.file_url)
+    const requiredReady = Boolean((candidateProfile as any)?.name) && Boolean((candidateProfile as any)?.current_role) && Boolean((candidateProfile as any)?.total_experience) && Boolean((candidateProfile as any)?.location)
+
+    if (!hasResume || !requiredReady) {
+      const current = typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : pathname
+      router.replace(`/onboarding?returnTo=${encodeURIComponent(current)}`)
+    }
+  }, [accessToken, candidateProfile, pathname, router])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0")
+    } catch {}
+  }, [collapsed])
 
   const avatarUrl = useMemo(() => {
     const meta = (session?.user?.user_metadata as any) || {}
@@ -101,23 +136,28 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut()
-    router.push("/jobs")
+    router.push("/")
     router.refresh()
   }
 
   return (
-    <div className="min-h-screen bg-[#f6f3ff] pb-20 md:pb-0">
-      <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur">
+    <div className="min-h-screen bg-app pb-20 md:pb-0">
+      <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur">
         <div className="flex h-16 w-full items-center gap-3 px-6">
           <Link href="/dashboard/jobs" className="flex items-center gap-2">
-            <div className="h-9 w-9 rounded-xl bg-primary/10" />
-            <div className="text-sm font-semibold">Truckinzy</div>
+            <div className="h-8 w-28 overflow-hidden">
+              <img 
+                src={BRAND_LOGO_URL} 
+                alt={BRAND_NAME} 
+                className="h-full w-full object-contain dark:invert transition-all duration-300" 
+              />
+            </div>
           </Link>
 
           <div className="ml-auto flex items-center gap-2">
             <div className="relative">
               <button
-                className="relative h-10 w-10 rounded-full border bg-card text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="relative h-10 w-10 rounded-full border border-border/60 bg-card/60 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                 onClick={() => {
                   setNotifOpen((v) => !v)
                   setMenuOpen(false)
@@ -134,13 +174,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               </button>
 
               {notifOpen ? (
-                <div className="absolute right-0 top-12 w-[340px] rounded-2xl border bg-card p-2 shadow-lg">
+                <div className="absolute right-0 top-12 w-[340px] rounded-2xl border border-border/60 bg-popover p-2 shadow-lg shadow-black/10 dark:shadow-black/40">
                   <div className="flex items-center justify-between px-2 py-1">
                     <div className="text-sm font-semibold">Notifications</div>
                     <button
                       className="rounded-xl px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                       onClick={async () => {
                         if (!accessToken) return
+                        setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
+                        setUnreadCount(0)
                         await fetch("/api/candidate/notifications", {
                           method: "POST",
                           headers: bearerHeaders(accessToken, { "Content-Type": "application/json" }),
@@ -158,42 +200,97 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                       <div className="px-3 py-6 text-sm text-muted-foreground">Loading…</div>
                     ) : notifications.length ? (
                       <div className="grid gap-1">
-                        {notifications.map((n: any) => (
-                          <button
-                            key={String(n.id)}
-                            className={[
-                              "w-full rounded-xl px-3 py-2 text-left hover:bg-accent",
-                              n.is_read ? "" : "bg-primary/5"
-                            ].join(" ")}
-                            onClick={async () => {
-                              if (!accessToken) return
-                              await fetch("/api/candidate/notifications", {
-                                method: "POST",
-                                headers: bearerHeaders(accessToken, { "Content-Type": "application/json" }),
-                                body: JSON.stringify({ action: "mark_read", id: n.id })
-                              })
-                              setNotifOpen(false)
-                              await loadNotifications()
-                              router.push("/dashboard/profile")
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium">
-                                  {n.type === "welcome" ? "Welcome" : n.type === "profile_updated" ? "Profile updated" : "Update"}
+                        {notifications.map((n: any) => {
+                          const type = String(n?.type || "")
+                          const payload = (n?.payload || {}) as any
+
+                          let title = "Update"
+                          if (type === "welcome") title = `Welcome to ${BRAND_NAME}`
+                          else if (type === "profile_updated") title = "Profile updated"
+                          else if (type === "application_submitted") title = "Application submitted"
+                          else if (type === "application_status_changed") title = "Application status updated"
+                          else if (type === "new_job_match") title = "New job match"
+                          else if (type === "new_job_published") title = "New job posted"
+
+                          let description = ""
+                          if (typeof payload?.message === "string" && payload.message.trim()) {
+                            description = payload.message.trim()
+                          } else if (Array.isArray(payload?.changed) && payload.changed.length) {
+                            description = `Updated: ${payload.changed.slice(0, 3).join(", ")}${payload.changed.length > 3 ? "…" : ""}`
+                          } else if (type === "application_submitted" || type === "application_status_changed") {
+                            const jobTitle = String(payload?.job_title || payload?.jobTitle || "").trim()
+                            const status = String(payload?.status || payload?.application_status || "").trim()
+                            if (jobTitle && status) {
+                              description = `Your application for ${jobTitle} is now ${status}.`
+                            } else if (jobTitle) {
+                              description = `Your application for ${jobTitle} has an update.`
+                            } else {
+                              description = "Your application has an update."
+                            }
+                          } else if (type === "new_job_match" || type === "new_job_published") {
+                            const jobTitle = String(payload?.job_title || payload?.jobTitle || "").trim()
+                            if (jobTitle) {
+                              description = `New role: ${jobTitle}`
+                            } else {
+                              description = "You have a new job opportunity."
+                            }
+                          } else if (type === "welcome") {
+                            description = "Set up your profile and start applying to jobs."
+                          } else {
+                            description = "You have a new update."
+                          }
+
+                          const applicationId =
+                            String(payload?.applicationId || payload?.application_id || "").trim() || null
+                          const jobId = String(payload?.jobId || payload?.job_id || "").trim() || null
+
+                          let target = "/dashboard/profile"
+                          if (type === "application_submitted" || type === "application_status_changed") {
+                            if (applicationId) {
+                              target = `/dashboard/my-work?tab=applications&applicationId=${encodeURIComponent(applicationId)}`
+                            } else if (jobId) {
+                              target = `/dashboard/my-work?tab=applications&jobId=${encodeURIComponent(jobId)}`
+                            } else {
+                              target = "/dashboard/my-work?tab=applications"
+                            }
+                          } else if (type === "new_job_match" || type === "new_job_published") {
+                            if (jobId) {
+                              target = `/dashboard/jobs?highlightJobId=${encodeURIComponent(jobId)}`
+                            } else {
+                              target = "/dashboard/jobs"
+                            }
+                          }
+
+                          return (
+                            <button
+                              key={String(n.id)}
+                              className={[
+                                "w-full rounded-xl px-3 py-2 text-left hover:bg-accent/60",
+                                n.is_read ? "" : "bg-primary/10"
+                              ].join(" ")}
+                              onClick={async () => {
+                                if (!accessToken) return
+                                setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, is_read: true } : x)))
+                                setUnreadCount((c) => Math.max(0, c - (n.is_read ? 0 : 1)))
+                                await fetch("/api/candidate/notifications", {
+                                  method: "POST",
+                                  headers: bearerHeaders(accessToken, { "Content-Type": "application/json" }),
+                                  body: JSON.stringify({ action: "mark_read", id: n.id })
+                                })
+                                setNotifOpen(false)
+                                router.push(target)
+                              }}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">{title}</div>
+                                  <div className="mt-0.5 text-xs text-muted-foreground">{description}</div>
                                 </div>
-                                <div className="mt-0.5 text-xs text-muted-foreground">
-                                  {typeof n?.payload?.message === "string"
-                                    ? n.payload.message
-                                    : Array.isArray(n?.payload?.changed)
-                                      ? `Updated: ${n.payload.changed.slice(0, 3).join(", ")}${n.payload.changed.length > 3 ? "…" : ""}`
-                                      : "You have a new update."}
-                                </div>
+                                {!n.is_read ? <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" /> : null}
                               </div>
-                              {!n.is_read ? <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" /> : null}
-                            </div>
-                          </button>
-                        ))}
+                            </button>
+                          )
+                        })}
                       </div>
                     ) : (
                       <div className="px-3 py-6 text-sm text-muted-foreground">No notifications yet.</div>
@@ -203,8 +300,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               ) : null}
             </div>
 
+            <ThemeToggle />
+
             <button
-              className="relative h-10 w-10 rounded-full border bg-card text-sm font-semibold"
+              className="relative h-10 w-10 rounded-full border border-border/60 bg-card/60 text-sm font-semibold"
               onClick={() => {
                 setMenuOpen((v) => !v)
                 setNotifOpen(false)
@@ -215,23 +314,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             </button>
 
             {menuOpen ? (
-              <div className="absolute right-4 top-16 w-56 rounded-2xl border bg-card p-2 shadow-lg">
+              <div className="absolute right-4 top-16 w-56 rounded-2xl border border-border/60 bg-popover p-2 shadow-lg shadow-black/10 dark:shadow-black/40">
                 <Link
-                  className="block rounded-xl px-3 py-2 text-sm hover:bg-accent"
+                  className="block rounded-xl px-3 py-2 text-sm hover:bg-accent/60"
                   href="/dashboard/profile"
                   onClick={() => setMenuOpen(false)}
                 >
                   Profile
                 </Link>
-                <Link
-                  className="block rounded-xl px-3 py-2 text-sm hover:bg-accent"
-                  href="/onboarding?returnTo=%2Fdashboard%2Fprofile"
-                  onClick={() => setMenuOpen(false)}
-                >
-                  Edit onboarding
-                </Link>
                 <button
-                  className="block w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-accent"
+                  className="block w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-accent/60"
                   onClick={() => {
                     setMenuOpen(false)
                     setAvailabilityOpen(true)
@@ -240,7 +332,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                   Work availability
                 </button>
                 <button
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm hover:bg-accent"
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm hover:bg-accent/60"
                   onClick={async () => {
                     setMenuOpen(false)
                     await signOut()
@@ -258,7 +350,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       <div className="flex w-full">
         <aside
           className={[
-            "relative hidden md:block shrink-0 border-r bg-card",
+            "relative hidden md:block shrink-0 border-r border-border/60 bg-panel",
             collapsed ? "w-[72px]" : "w-[240px]"
           ].join(" ")}
         >
@@ -266,7 +358,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <div className={collapsed ? "flex justify-center" : "flex items-center justify-between"}>
               <div className={["text-xs font-medium text-muted-foreground", collapsed ? "sr-only" : ""].join(" ")}>Navigation</div>
               <button
-                className="rounded-xl border bg-background p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="rounded-xl border border-border/60 bg-card/60 p-2 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                 onClick={() => setCollapsed((v) => !v)}
                 aria-label="Toggle sidebar"
               >
@@ -294,7 +386,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                     href={disabled ? "#" : item.href}
                     className={[
                       "flex items-center justify-between rounded-xl px-3 py-2 text-sm",
-                      active ? "bg-accent" : "hover:bg-accent",
+                      active ? "bg-accent/60" : "hover:bg-accent/60",
                       disabled ? "cursor-not-allowed opacity-60" : ""
                     ].join(" ")}
                   >
@@ -315,13 +407,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
       <WorkAvailabilityModal open={availabilityOpen} onClose={() => setAvailabilityOpen(false)} />
 
-      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/85 backdrop-blur md:hidden">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 md:hidden">
         <div className="flex w-full items-center justify-around px-2 py-2">
           <Link
             href="/dashboard/jobs"
             className={[
               "flex flex-col items-center gap-1 rounded-2xl px-4 py-2 text-xs",
-              pathname === "/dashboard" || pathname.startsWith("/dashboard/jobs") ? "bg-accent" : ""
+              pathname === "/dashboard" || pathname.startsWith("/dashboard/jobs") ? "bg-accent/60" : ""
             ].join(" ")}
           >
             <Briefcase className="h-5 w-5" />
@@ -331,7 +423,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             href="/dashboard/my-work?tab=invites"
             className={[
               "flex flex-col items-center gap-1 rounded-2xl px-4 py-2 text-xs",
-              pathname.startsWith("/dashboard/my-work") ? "bg-accent" : ""
+              pathname.startsWith("/dashboard/my-work") ? "bg-accent/60" : ""
             ].join(" ")}
           >
             <LayoutGrid className="h-5 w-5" />
@@ -341,7 +433,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             href="/dashboard/profile"
             className={[
               "flex flex-col items-center gap-1 rounded-2xl px-4 py-2 text-xs",
-              pathname.startsWith("/dashboard/profile") ? "bg-accent" : ""
+              pathname.startsWith("/dashboard/profile") ? "bg-accent/60" : ""
             ].join(" ")}
           >
             <User className="h-5 w-5" />

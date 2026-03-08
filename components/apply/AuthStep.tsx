@@ -34,7 +34,7 @@ export function AuthStep({
   onError: (message: string | null) => void
 }) {
   const [busy, setBusy] = useState(false)
-  const [consent, setConsent] = useState(false)
+  const [consent, setConsent] = useState(true)
 
   const returnTo = useMemo(() => returnToProp || `/jobs/${jobId}?apply=1`, [jobId, returnToProp])
 
@@ -75,7 +75,7 @@ export function AuthStep({
                 className="mt-1 h-4 w-4"
               />
               <div>
-                <div className="font-medium">I agree to create a Truckinzy profile</div>
+                <div className="font-medium">I agree to create a GatiHire profile</div>
                 <div className="mt-1 text-muted-foreground">We’ll save your resume and preferences so you can apply in a few taps next time.</div>
               </div>
             </label>

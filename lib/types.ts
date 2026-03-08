@@ -72,6 +72,13 @@ export type Candidate = {
   total_experience: string
   desired_role: string | null
   preferred_location: string | null
+  looking_for_work?: boolean | null
+  open_job_types?: string[] | null
+  available_start_time?: string | null
+  available_end_time?: string | null
+  work_timezone?: string | null
+  available_start_date?: string | null
+  availability_notes?: string | null
   current_salary?: string | null
   expected_salary?: string | null
   notice_period?: string | null
@@ -93,12 +100,7 @@ export type Candidate = {
   projects?: unknown
   public_profile_enabled?: boolean | null
   public_profile_slug?: string | null
-  looking_for_work?: boolean | null
-  open_job_types?: string[] | null
   preferred_roles?: string[] | null
-  available_start_time?: string | null
-  available_end_time?: string | null
-  work_timezone?: string | null
   file_name: string | null
   file_url: string | null
   file_size: number | null

@@ -14,6 +14,11 @@ type Availability = {
   available_end_time: string | null
   work_timezone: string | null
   preferred_location: string
+  current_salary: string | null
+  expected_salary: string | null
+  notice_period: string | null
+  available_start_date: string | null
+  availability_notes: string | null
 }
 
 const JOB_TYPES = [
@@ -40,12 +45,40 @@ const TIME_OPTIONS = [
 ]
 
 const TZ_OPTIONS = [
-  "Indian Standard Time (IST), Sri Lanka Time (SLST)",
+  "Indian Standard Time (IST)",
+  "Sri Lanka Time (SLST)",
   "UTC",
   "US Eastern Time (ET)",
   "US Pacific Time (PT)",
-  "Europe Central Time (CET)"
+  "Europe Central Time (CET)",
 ]
+
+const LOCATION_PRESETS = [
+  "Anywhere in India",
+  "Delhi NCR",
+  "Mumbai",
+  "Bengaluru",
+  "Hyderabad",
+  "Chennai",
+  "Pune",
+  "Ahmedabad",
+  "Kolkata",
+  "Jaipur",
+  "Surat",
+  "Indore",
+  "Lucknow"
+]
+
+function splitLocations(raw: string) {
+  return Array.from(
+    new Set(
+      String(raw || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 8)
+}
 
 export function WorkAvailabilityModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { session } = useSupabaseSession()
@@ -61,8 +94,16 @@ export function WorkAvailabilityModal({ open, onClose }: { open: boolean; onClos
     available_start_time: "9:00 AM",
     available_end_time: "5:00 PM",
     work_timezone: TZ_OPTIONS[0],
-    preferred_location: ""
+    preferred_location: "",
+    current_salary: "",
+    expected_salary: "",
+    notice_period: "",
+    available_start_date: "",
+    availability_notes: ""
   })
+  const [prefLocs, setPrefLocs] = useState<string[]>([])
+  const [prefLocInput, setPrefLocInput] = useState("")
+  const [prefLocFocused, setPrefLocFocused] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -83,8 +124,14 @@ export function WorkAvailabilityModal({ open, onClose }: { open: boolean; onClos
           available_start_time: av.available_start_time || "9:00 AM",
           available_end_time: av.available_end_time || "5:00 PM",
           work_timezone: av.work_timezone || TZ_OPTIONS[0],
-          preferred_location: av.preferred_location || ""
+          preferred_location: av.preferred_location || "",
+          current_salary: av.current_salary || "",
+          expected_salary: av.expected_salary || "",
+          notice_period: av.notice_period || "",
+          available_start_date: av.available_start_date || "",
+          availability_notes: av.availability_notes || ""
         })
+        setPrefLocs(splitLocations(av.preferred_location || ""))
       })
       .catch((e) => setError(e.message || "Failed to load"))
       .finally(() => setLoading(false))
@@ -97,6 +144,24 @@ export function WorkAvailabilityModal({ open, onClose }: { open: boolean; onClos
       else set.add(id)
       return { ...prev, open_job_types: Array.from(set) }
     })
+  }
+
+  const prefLocTypeahead = useMemo(() => {
+    const q = prefLocInput.trim().toLowerCase()
+    if (!q) return [] as string[]
+    const taken = new Set(prefLocs.map((x) => x.toLowerCase()))
+    return LOCATION_PRESETS.filter((x) => x.toLowerCase().includes(q) && !taken.has(x.toLowerCase())).slice(0, 10)
+  }, [prefLocInput, prefLocs])
+
+  const addPrefLoc = (raw: string) => {
+    const t = raw.trim()
+    if (!t) return
+    setPrefLocs((prev) => Array.from(new Set([...prev, t])).slice(0, 8))
+    setPrefLocInput("")
+  }
+
+  const removePrefLoc = (v: string) => {
+    setPrefLocs((prev) => prev.filter((x) => x !== v))
   }
 
   const canSave = useMemo(() => {
@@ -115,7 +180,10 @@ export function WorkAvailabilityModal({ open, onClose }: { open: boolean; onClos
       const res = await fetch("/api/candidate/availability", {
         method: "PUT",
         headers: bearerHeaders(accessToken, { "Content-Type": "application/json" }),
-        body: JSON.stringify(data)
+        body: JSON.stringify({
+          ...data,
+          preferred_location: prefLocs.join(", ")
+        })
       })
       const j = await res.json().catch(() => null)
       if (!res.ok) throw new Error(j?.error || "Failed to save")
@@ -128,7 +196,7 @@ export function WorkAvailabilityModal({ open, onClose }: { open: boolean; onClos
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Set your work availability">
+    <Modal open={open} onClose={onClose} title="Set your work availability" size="lg">
       <div className="grid gap-4">
         <div className="text-sm text-muted-foreground">
           If you’re looking for work, select the job types and hours you’re open to working, and it’ll appear on your profile.
@@ -207,15 +275,100 @@ export function WorkAvailabilityModal({ open, onClose }: { open: boolean; onClos
         </div>
 
         <div className="grid gap-2">
-          <div className="text-xs font-medium text-muted-foreground">Preferred location</div>
+          <div className="text-xs font-medium text-muted-foreground">Preferred locations</div>
+          <div className="relative">
+            <div className="rounded-2xl border border-input bg-background px-4 py-2 focus-within:ring-2 focus-within:ring-ring/20">
+              <div className="flex flex-wrap items-center gap-2">
+                {prefLocs.map((v) => (
+                  <button
+                    key={`pl:${v}`}
+                    type="button"
+                    onClick={() => removePrefLoc(v)}
+                    className="inline-flex items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
+                  >
+                    <span className="max-w-[180px] truncate">{v}</span>
+                    <span className="text-muted-foreground">×</span>
+                  </button>
+                ))}
+                <input
+                  value={prefLocInput}
+                  onChange={(e) => setPrefLocInput(e.target.value)}
+                  onFocus={() => setPrefLocFocused(true)}
+                  onBlur={() => window.setTimeout(() => setPrefLocFocused(false), 120)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      addPrefLoc(prefLocInput)
+                    }
+                  }}
+                  disabled={!data.looking_for_work}
+                  placeholder={prefLocs.length ? "Add location" : "Add preferred locations"}
+                  className="min-w-[140px] flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                />
+              </div>
+            </div>
+            {prefLocFocused && prefLocInput.trim() && prefLocTypeahead.length ? (
+              <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-2xl border bg-background shadow-lg">
+                {prefLocTypeahead.map((opt) => (
+                  <button
+                    key={`prefLoc:${opt}`}
+                    type="button"
+                    onClick={() => addPrefLoc(opt)}
+                    className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-accent"
+                  >
+                    <span className="truncate">{opt}</span>
+                    <span className="text-xs text-muted-foreground">Add</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="text-xs text-muted-foreground">Used for better job matching and recruiter filters.</div>
+        </div>
+
+        <div className="grid gap-2">
+          <div className="text-xs font-medium text-muted-foreground">Start date</div>
           <input
-            value={data.preferred_location}
-            onChange={(e) => setData((p) => ({ ...p, preferred_location: e.target.value }))}
+            type="date"
+            value={data.available_start_date || ""}
+            onChange={(e) => setData((p) => ({ ...p, available_start_date: e.target.value }))}
             disabled={!data.looking_for_work}
-            placeholder="e.g. Ahmedabad, Remote, India"
             className="h-11 rounded-xl border border-input bg-background px-3 text-sm"
           />
-          <div className="text-xs text-muted-foreground">Used for better job matching and recruiter filters.</div>
+        </div>
+
+        <div className="grid gap-2">
+          <div className="text-xs font-medium text-muted-foreground">Compensation</div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <input
+              value={data.current_salary || ""}
+              onChange={(e) => setData((p) => ({ ...p, current_salary: e.target.value }))}
+              placeholder="Current salary"
+              className="h-11 rounded-xl border border-input bg-background px-3 text-sm"
+            />
+            <input
+              value={data.expected_salary || ""}
+              onChange={(e) => setData((p) => ({ ...p, expected_salary: e.target.value }))}
+              placeholder="Expected salary"
+              className="h-11 rounded-xl border border-input bg-background px-3 text-sm"
+            />
+            <input
+              value={data.notice_period || ""}
+              onChange={(e) => setData((p) => ({ ...p, notice_period: e.target.value }))}
+              placeholder="Notice period"
+              className="h-11 rounded-xl border border-input bg-background px-3 text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-2">
+          <div className="text-xs font-medium text-muted-foreground">Availability notes</div>
+          <textarea
+            value={data.availability_notes || ""}
+            onChange={(e) => setData((p) => ({ ...p, availability_notes: e.target.value }))}
+            placeholder="Share any notes about shift preferences or constraints"
+            className="min-h-[120px] rounded-2xl border border-input bg-background px-4 py-3 text-sm"
+          />
         </div>
 
         <div className="flex justify-end">

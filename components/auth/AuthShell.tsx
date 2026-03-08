@@ -1,40 +1,66 @@
 import type { PropsWithChildren } from "react"
+import { BRAND_LOGO_URL, BRAND_NAME } from "@/lib/branding"
+import Link from "next/link"
 
 export function AuthShell({ title, subtitle, children }: PropsWithChildren<{ title: string; subtitle: string }>) {
   return (
-    <div className="min-h-[calc(100vh-0px)] grid lg:grid-cols-2">
-      <div className="hidden lg:flex flex-col justify-between bg-gradient-to-br from-[#0B1220] via-[#0F1B33] to-[#0B1220] px-10 py-10 text-white">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <div className="h-9 w-9 rounded-xl bg-white/10" />
-          <span>Truckinzy</span>
+    <div className="h-screen w-full flex overflow-hidden bg-white dark:bg-zinc-950 transition-colors duration-300">
+      {/* Left side: Content */}
+      <div className="flex-1 flex flex-col px-6 py-10 lg:px-20 lg:py-16 relative overflow-y-auto lg:overflow-hidden">
+        {/* Logo at top left */}
+        <div className="mb-8 lg:mb-12">
+          <Link href="/jobs" className="inline-block">
+            <img 
+              src={BRAND_LOGO_URL} 
+              alt={BRAND_NAME} 
+              className="h-8 w-auto object-contain brightness-0 dark:invert transition-all duration-300" 
+            />
+          </Link>
         </div>
 
-        <div className="max-w-md">
-          <div className="text-4xl font-semibold tracking-tight">Hire and get hired in logistics.</div>
-          <div className="mt-3 text-sm text-white/70">
-            Create your profile once, apply faster, and track everything from one dashboard.
-          </div>
-
-          <div className="mt-8 grid gap-3 text-sm text-white/70">
-            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">Resume autofill + structured profile</div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">Invites + application tracking</div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">Built for drivers, ops, dispatch, warehouse</div>
+        {/* Center content */}
+        <div className="flex-1 flex flex-col justify-center">
+          <div className="w-full max-w-[400px] mx-auto">
+            <div className="mb-10">
+              <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-white">{title}</h1>
+              <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">{subtitle}</p>
+            </div>
+            
+            <div className="space-y-6">
+              {children}
+            </div>
           </div>
         </div>
-
-        <div className="text-xs text-white/50">© {new Date().getFullYear()} Truckinzy</div>
+        
+        {/* Footer for mobile/bottom */}
+        <div className="mt-10 text-[10px] uppercase tracking-widest text-zinc-400 dark:text-zinc-600">
+          © {new Date().getFullYear()} {BRAND_NAME}. Built for Logistics.
+        </div>
       </div>
 
-      <div className="flex items-center justify-center px-5 py-10">
-        <div className="w-full max-w-md">
-          <div className="mb-8">
-            <div className="text-2xl font-semibold tracking-tight">{title}</div>
-            <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>
+      {/* Right side: Image with quote */}
+      <div className="hidden lg:flex flex-1 p-4 relative">
+        <div className="w-full h-full relative overflow-hidden rounded-[2.5rem] shadow-2xl">
+          <img 
+            src="https://i.postimg.cc/VvGJcvqz/Chat-GPT-Image-Mar-8-2026-01-19-05-PM.png"
+            alt="Logistics background"
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+          <div className="absolute inset-0 bg-gradient-to-br from-black/60 via-black/20 to-black/60" />
+          
+          <div className="relative z-10 flex flex-col items-center justify-center h-full w-full px-6 text-center -mt-32">
+            <div className="max-w-md">
+              <h2 className="text-3xl font-medium leading-tight text-white mb-6 drop-shadow-lg">
+                Every career milestone in logistics is a story of human ingenuity.
+              </h2>
+              {/* <div className="mx-auto h-1.5 w-16 bg-blue-500 rounded-full shadow-lg" /> */}
+              {/* <p className="relative top-8 text-sm text-white/100 font-light tracking-wide drop-shadow-md">
+                Powering the backbone of global commerce.
+              </p> */}
+            </div>
           </div>
-          {children}
         </div>
       </div>
     </div>
   )
 }
-

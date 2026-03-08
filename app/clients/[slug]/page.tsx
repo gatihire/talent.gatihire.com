@@ -30,7 +30,7 @@ export default async function ClientPublicPage(props: { params: Promise<{ slug: 
 
   return (
     <div>
-      <PublicTopNav />
+      <PublicTopNav minimal />
 
       <main className="mx-auto max-w-6xl px-4 py-10">
         <div className="rounded-3xl border bg-card p-8">

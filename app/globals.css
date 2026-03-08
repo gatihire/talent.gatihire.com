@@ -4,7 +4,10 @@
 
 @layer base {
   :root {
-    --background: 240 33% 99%;
+    --app: 210 40% 98%;
+    --panel: 210 40% 96%;
+
+    --background: 0 0% 100%;
     --foreground: 222 47% 11%;
 
     --card: 0 0% 100%;
@@ -13,27 +16,69 @@
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
 
-    --primary: 222 47% 11%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
 
-    --secondary: 220 14% 96%;
+    --secondary: 210 40% 96%;
     --secondary-foreground: 222 47% 11%;
 
-    --muted: 220 14% 96%;
-    --muted-foreground: 215 16% 47%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 40%;
 
-    --accent: 240 33% 97%;
+    --accent: 213 94% 94%;
     --accent-foreground: 222 47% 11%;
 
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 210 40% 98%;
 
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 222 47% 11%;
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
 
-    --brand: 222 47% 11%;
-    --brand-2: 156 60% 40%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+
+    --brand: 221 83% 53%;
+    --brand-2: 142 71% 45%;
+  }
+
+  .dark {
+    --app: 221 49% 8%;
+    --panel: 222 40% 12%;
+
+    --background: 221 49% 8%;
+    --foreground: 210 40% 96%;
+
+    --card: 222 34% 15%;
+    --card-foreground: 210 40% 96%;
+
+    --popover: 222 34% 15%;
+    --popover-foreground: 210 40% 96%;
+
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 222 28% 20%;
+    --secondary-foreground: 210 40% 96%;
+
+    --muted: 222 24% 18%;
+    --muted-foreground: 215 16% 65%;
+
+    --accent: 222 24% 18%;
+    --accent-foreground: 210 40% 96%;
+
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 210 40% 98%;
+
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+
+    --border: 215 28% 22%;
+    --input: 215 28% 22%;
+    --ring: 221 83% 53%;
+
+    --brand: 221 83% 53%;
+    --brand-2: 142 71% 45%;
   }
 }
 

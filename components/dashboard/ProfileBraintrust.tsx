@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Image from "next/image"
+import { useRouter, useSearchParams } from "next/navigation"
 import type { Candidate } from "@/lib/types"
 import { bearerHeaders } from "@/lib/http"
 import { tagsToMap, mapToTags } from "@/components/apply/tagUtils"
@@ -15,6 +16,33 @@ import { CalendarDays, Camera, ExternalLink, Link2, MapPin, Pencil, Plus, Trash2
 type CandidateLike = Omit<Candidate, "email" | "phone"> & {
   email?: string
   phone?: string | null
+}
+
+const LOCATION_PRESETS = [
+  "Anywhere in India",
+  "Delhi NCR",
+  "Mumbai",
+  "Bengaluru",
+  "Hyderabad",
+  "Chennai",
+  "Pune",
+  "Ahmedabad",
+  "Kolkata",
+  "Jaipur",
+  "Surat",
+  "Indore",
+  "Lucknow"
+]
+
+function splitLocations(raw: string) {
+  return Array.from(
+    new Set(
+      String(raw || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 8)
 }
 
 function initialsFromName(name: string) {
@@ -46,6 +74,25 @@ function uniq(values: string[]) {
     out.push(v)
   }
   return out
+}
+
+function normalizeExternalUrl(raw: string) {
+  if (!raw) return ""
+  const trimmed = raw.trim()
+  if (!trimmed) return ""
+  try {
+    const url = new URL(trimmed)
+    return url.href
+  } catch {
+    // fallback: prepend https:// if no protocol
+    return trimmed.startsWith("http") ? trimmed : `https://${trimmed}`
+  }
+}
+
+function isValidEmail(value: unknown) {
+  const email = typeof value === "string" ? value.trim() : ""
+  if (!email) return false
+  return /^\S+@\S+\.\S+$/.test(email)
 }
 
 type ProjectItem = {
@@ -118,12 +165,18 @@ export function ProfileBraintrust({
   initialWorkItems?: any[]
   initialEducationItems?: any[]
 }) {
+  const router = useRouter()
+  const sp = useSearchParams()
   const readonly = mode === "public"
   const canEdit = !readonly && Boolean(accessToken)
   const [tab, setTab] = useState<"about" | "resume">("about")
   const [availabilityOpen, setAvailabilityOpen] = useState(false)
 
   const [origin, setOrigin] = useState("")
+  const [resumeSignedUrl, setResumeSignedUrl] = useState<string | null>(null)
+  const [resumeUploading, setResumeUploading] = useState(false)
+  const [resumeUploadError, setResumeUploadError] = useState<string | null>(null)
+  const showResumeTab = Boolean(candidate.file_url || resumeSignedUrl || canEdit)
 
   const [bioOpen, setBioOpen] = useState(false)
   const [websitesOpen, setWebsitesOpen] = useState(false)
@@ -204,11 +257,53 @@ export function ProfileBraintrust({
     return { pct, bars }
   }, [candidate, skills.length, workItems.length, educationItems.length])
 
+  const missingName = !String(candidate.name || "").trim()
+  const missingEmail = !isValidEmail(candidate.email)
+  const missingPhone = !String(candidate.phone || "").trim()
+  const missingLocation = !String(candidate.location || "").trim()
+  const missingRole = !String(candidate.current_role || "").trim()
+  const missingExperience = !String(candidate.total_experience || "").trim()
+  const hasMissingRequired = missingName || missingEmail || missingPhone || missingLocation || missingRole || missingExperience
+  const missingRequiredLabels = useMemo(
+    () =>
+      [
+        missingName ? "Full name" : null,
+        missingEmail ? "Email" : null,
+        missingPhone ? "Phone" : null,
+        missingLocation ? "Location" : null,
+        missingRole ? "Current role" : null,
+        missingExperience ? "Total experience" : null
+      ].filter(Boolean) as string[],
+    [missingName, missingEmail, missingPhone, missingLocation, missingRole, missingExperience]
+  )
+
+  const availabilityJobTypes = useMemo(() => asStringArray(candidate.open_job_types), [candidate.open_job_types])
+  const availabilityLocations = useMemo(() => splitLocations(candidate.preferred_location || ""), [candidate.preferred_location])
+  const availabilityHours = useMemo(() => {
+    if (!candidate.available_start_time || !candidate.available_end_time) return ""
+    return `${candidate.available_start_time} – ${candidate.available_end_time}`
+  }, [candidate.available_start_time, candidate.available_end_time])
+  const availabilityStartLabel = useMemo(() => {
+    if (!candidate.available_start_date) return ""
+    const d = new Date(candidate.available_start_date)
+    if (Number.isNaN(d.getTime())) return ""
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+  }, [candidate.available_start_date])
+  const showAvailabilityCallout =
+    !candidate.looking_for_work ||
+    availabilityJobTypes.length === 0 ||
+    !candidate.work_timezone ||
+    !candidate.available_start_time ||
+    !candidate.available_end_time ||
+    !candidate.available_start_date ||
+    availabilityLocations.length === 0
+
   const certifications = useMemo(() => asStringArray(candidate.certifications), [candidate.certifications])
   const projectItems = useMemo(() => parseProjectItems(candidate.projects), [candidate.projects])
 
   const [bioDraft, setBioDraft] = useState({
     name: candidate.name || "",
+    email: candidate.email || "",
     phone: candidate.phone || "",
     current_role: candidate.current_role || "",
     current_company: candidate.current_company || "",
@@ -225,6 +320,11 @@ export function ProfileBraintrust({
     summary: candidate.summary || "",
     location: candidate.location || ""
   })
+
+  const [bioLocFocused, setBioLocFocused] = useState(false)
+  const [prefLocsDraft, setPrefLocsDraft] = useState<string[]>(splitLocations(candidate.preferred_location || ""))
+  const [prefLocInput, setPrefLocInput] = useState("")
+  const [prefLocFocused, setPrefLocFocused] = useState(false)
   const [websitesDraft, setWebsitesDraft] = useState({
     linkedin_profile: candidate.linkedin_profile || "",
     portfolio_url: candidate.portfolio_url || "",
@@ -236,9 +336,61 @@ export function ProfileBraintrust({
   const [projectOpen, setProjectOpen] = useState(false)
   const [projectDraft, setProjectDraft] = useState<ProjectItem>({ id: "", title: "", description: "", link: "", role: "", technologies: [] })
 
+  const bioLocTypeahead = useMemo(() => {
+    const q = String(bioDraft.location || "").trim().toLowerCase()
+    if (!q) return [] as string[]
+    return LOCATION_PRESETS.filter((x) => x.toLowerCase().includes(q)).slice(0, 10)
+  }, [bioDraft.location])
+
+  const prefLocTypeahead = useMemo(() => {
+    const q = prefLocInput.trim().toLowerCase()
+    if (!q) return [] as string[]
+    const taken = new Set(prefLocsDraft.map((x) => x.toLowerCase()))
+    return LOCATION_PRESETS.filter((x) => x.toLowerCase().includes(q) && !taken.has(x.toLowerCase())).slice(0, 10)
+  }, [prefLocInput, prefLocsDraft])
+
+  const addPrefLoc = (raw: string) => {
+    const t = raw.trim()
+    if (!t) return
+    setPrefLocsDraft((prev) => Array.from(new Set([...prev, t])).slice(0, 8))
+    setPrefLocInput("")
+  }
+
+  const removePrefLoc = (v: string) => {
+    setPrefLocsDraft((prev) => prev.filter((x) => x !== v))
+  }
+
   useEffect(() => {
     setOrigin(window.location.origin)
   }, [])
+
+  useEffect(() => {
+    const desired = (sp.get("tab") || "").trim().toLowerCase()
+    if (desired === "resume") setTab("resume")
+  }, [sp])
+
+  useEffect(() => {
+    const fallbackUrl = typeof candidate?.file_url === "string" ? candidate.file_url : ""
+    setResumeSignedUrl(fallbackUrl || null)
+    if (!accessToken || !candidate?.file_url) return
+
+    let cancelled = false
+    fetch("/api/candidate/resume/url", { headers: bearerHeaders(accessToken) })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return
+        const url = typeof d?.signedUrl === "string" ? d.signedUrl : fallbackUrl || null
+        setResumeSignedUrl(url)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setResumeSignedUrl(fallbackUrl || null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [accessToken, candidate?.file_url])
 
   const publicProfileUrl = useMemo(() => {
     if (!candidate.public_profile_enabled || !candidate.public_profile_slug || !origin) return null
@@ -246,20 +398,33 @@ export function ProfileBraintrust({
   }, [candidate.public_profile_enabled, candidate.public_profile_slug, origin])
 
   useEffect(() => {
-    if (!canEdit || !accessToken) return
-    fetch("/api/candidate/work-history", { headers: bearerHeaders(accessToken) })
-      .then((r) => r.json())
-      .then((d) => setWorkItems(Array.isArray(d?.items) ? d.items : []))
-      .catch(() => setWorkItems([]))
-  }, [accessToken, canEdit])
+    if (initialWorkItems) setWorkItems(initialWorkItems)
+  }, [initialWorkItems])
+
+  useEffect(() => {
+    if (initialEducationItems) setEducationItems(initialEducationItems)
+  }, [initialEducationItems])
 
   useEffect(() => {
     if (!canEdit || !accessToken) return
-    fetch("/api/candidate/education", { headers: bearerHeaders(accessToken) })
-      .then((r) => r.json())
-      .then((d) => setEducationItems(Array.isArray(d?.items) ? d.items : []))
-      .catch(() => setEducationItems([]))
-  }, [accessToken, canEdit])
+    // Only fetch if not provided as initial props or if we want to refresh
+    if (initialWorkItems === undefined) {
+      fetch("/api/candidate/work-history", { headers: bearerHeaders(accessToken) })
+        .then((r) => r.json())
+        .then((d) => setWorkItems(Array.isArray(d?.items) ? d.items : []))
+        .catch(() => setWorkItems([]))
+    }
+  }, [accessToken, canEdit, initialWorkItems])
+
+  useEffect(() => {
+    if (!canEdit || !accessToken) return
+    if (initialEducationItems === undefined) {
+      fetch("/api/candidate/education", { headers: bearerHeaders(accessToken) })
+        .then((r) => r.json())
+        .then((d) => setEducationItems(Array.isArray(d?.items) ? d.items : []))
+        .catch(() => setEducationItems([]))
+    }
+  }, [accessToken, canEdit, initialEducationItems])
 
   useEffect(() => {
     if (!readonly) return
@@ -291,6 +456,7 @@ export function ProfileBraintrust({
   const primeBioDraft = () => {
     setBioDraft({
       name: candidate.name || "",
+      email: candidate.email || "",
       phone: candidate.phone || "",
       current_role: candidate.current_role || "",
       current_company: candidate.current_company || "",
@@ -307,6 +473,8 @@ export function ProfileBraintrust({
       summary: candidate.summary || "",
       location: candidate.location || ""
     })
+    setPrefLocsDraft(splitLocations(candidate.preferred_location || ""))
+    setPrefLocInput("")
   }
 
   const openNewWork = () => {
@@ -458,16 +626,28 @@ export function ProfileBraintrust({
   }
 
   const uploadResume = async (file: File) => {
-    const fd = new FormData()
-    fd.append("resume", file)
-    const res = await fetch("/api/candidate/resume/parse", {
-      method: "POST",
-      headers: bearerHeaders(accessToken),
-      body: fd
-    })
-    const data = await res.json().catch(() => null)
-    if (!res.ok) throw new Error(data?.error || "Failed to upload")
-    if (data?.candidate) onCandidateUpdated(data.candidate)
+    if (!accessToken) return
+    setResumeUploading(true)
+    setResumeUploadError(null)
+    try {
+      const fd = new FormData()
+      fd.append("resume", file)
+      const res = await fetch("/api/candidate/resume/parse", {
+        method: "POST",
+        headers: bearerHeaders(accessToken),
+        body: fd
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        const msg = String(data?.error || "Failed to upload")
+        setResumeUploadError(msg)
+        throw new Error(msg)
+      }
+      if (data?.candidate) onCandidateUpdated(data.candidate)
+      router.push(`/onboarding?returnTo=${encodeURIComponent("/dashboard/profile?tab=resume")}`)
+    } finally {
+      setResumeUploading(false)
+    }
   }
 
   const uploadAvatar = async (file: File) => {
@@ -485,14 +665,14 @@ export function ProfileBraintrust({
 
   return (
     <div className="grid gap-6">
-      <div className="rounded-3xl border bg-card overflow-hidden">
-        <div className="h-40 bg-gradient-to-r from-[#efe6ff] via-[#e8ddff] to-[#f6f3ff]" />
+      <div className="sticky top-16 z-30 -m-6 mb-0 border-b bg-background/90 px-6 py-6 backdrop-blur-md sm:static sm:top-auto sm:m-0 sm:mb-6 sm:rounded-3xl sm:border sm:bg-card sm:p-0 sm:overflow-hidden sm:backdrop-blur-none">
+        <div className="hidden h-40 bg-gradient-to-r from-panel via-card to-background sm:block" />
 
-        <div className="px-6 pb-6">
-          <div className="relative z-10 -mt-12 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div className="flex items-end gap-4">
-              <div className="relative">
-                <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border bg-background text-lg font-semibold">
+        <div className="pb-0 sm:px-6 sm:pb-6">
+          <div className="relative z-10 flex flex-col gap-4 sm:-mt-12 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex items-center gap-4 sm:items-end">
+              <div className="relative shrink-0">
+                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border bg-background text-base font-semibold sm:h-20 sm:w-20 sm:text-lg">
                   {avatarUrl ? (
                     <Image src={avatarUrl} alt={candidate.name} width={80} height={80} className="h-full w-full object-cover" unoptimized />
                   ) : (
@@ -513,7 +693,7 @@ export function ProfileBraintrust({
                 ) : null}
 
                 {canEdit ? (
-                  <label className="absolute -bottom-1 -right-1 flex h-9 w-9 cursor-pointer items-center justify-center rounded-full bg-foreground text-background">
+                  <label className="absolute -bottom-1 -right-1 flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-foreground text-background sm:h-9 sm:w-9">
                     <input
                       type="file"
                       accept="image/*"
@@ -523,30 +703,30 @@ export function ProfileBraintrust({
                         if (f) uploadAvatar(f)
                       }}
                     />
-                    <Camera className="h-4 w-4" />
+                    <Camera className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </label>
                 ) : null}
               </div>
 
-              <div className="rounded-2xl bg-card/85 px-3 py-2 backdrop-blur">
+              <div className="min-w-0 flex-1 sm:rounded-2xl sm:bg-card/85 sm:px-3 sm:py-2 sm:backdrop-blur">
                 <div className="flex items-center gap-2">
-                  <div className="text-3xl font-semibold tracking-tight">{candidate.name}</div>
+                  <div className="truncate text-xl font-semibold tracking-tight sm:text-3xl">{candidate.name}</div>
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                  <span className="inline-flex items-center gap-2">
-                    <MapPin className="h-4 w-4" />
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground sm:mt-2 sm:text-sm">
+                  <span className="inline-flex items-center gap-1.5">
+                    <MapPin className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                     {candidate.location}
                   </span>
-                  {candidate.current_role ? <span>• {candidate.current_role}</span> : null}
-                  {lastUpdatedLabel ? <span>• Profile last updated on: {lastUpdatedLabel}</span> : null}
+                  {candidate.current_role ? <span className="hidden sm:inline">• {candidate.current_role}</span> : null}
+                  {lastUpdatedLabel ? <span className="hidden lg:inline">• Updated {lastUpdatedLabel}</span> : null}
                 </div>
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 sm:mb-2">
               {canEdit ? (
                 <>
-                  <Button variant="secondary" onClick={() => setAvailabilityOpen(true)}>
+                  <Button variant={showAvailabilityCallout ? "danger" : "secondary"} onClick={() => setAvailabilityOpen(true)}>
                     Set work availability
                   </Button>
                   {publicProfileUrl ? (
@@ -580,7 +760,7 @@ export function ProfileBraintrust({
             </div>
           </div>
 
-          <div className="mt-6 flex gap-6 border-b">
+          <div className="mt-4 flex gap-6 border-b sm:mt-6">
             <button
               className={[
                 "pb-3 text-sm font-medium",
@@ -590,15 +770,17 @@ export function ProfileBraintrust({
             >
               About
             </button>
-            <button
-              className={[
-                "pb-3 text-sm font-medium",
-                tab === "resume" ? "border-b-2 border-foreground text-foreground" : "text-muted-foreground"
-              ].join(" ")}
-              onClick={() => setTab("resume")}
-            >
-              Resume
-            </button>
+            {showResumeTab ? (
+              <button
+                className={[
+                  "pb-3 text-sm font-medium",
+                  tab === "resume" ? "border-b-2 border-foreground text-foreground" : "text-muted-foreground"
+                ].join(" ")}
+                onClick={() => setTab("resume")}
+              >
+                Resume
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -607,7 +789,7 @@ export function ProfileBraintrust({
         <div className="grid gap-6">
           <div className="grid gap-6 lg:grid-cols-12">
             <div className="lg:col-span-7">
-              <div className="rounded-3xl border bg-[#efe6ff] p-6">
+              <div className="rounded-3xl border border-border/60 bg-card/60 p-6">
                 <div className="text-base font-semibold">Add your headline and bio</div>
                 <div className="mt-1 text-sm text-muted-foreground">Share more about yourself and what you hope to accomplish.</div>
                 <div className="mt-4">
@@ -631,7 +813,7 @@ export function ProfileBraintrust({
             </div>
 
             <div className="lg:col-span-5">
-              <div className="rounded-3xl border bg-card p-6 shadow-sm">
+              <div className="rounded-3xl border bg-card p-4 shadow-sm sm:p-6">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-base font-semibold">{candidate.total_experience} experience</div>
@@ -656,7 +838,7 @@ export function ProfileBraintrust({
                 </div>
                 <div className="mt-6 flex items-center gap-2">
                   {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className={"h-8 w-8 rounded-xl " + (i < profileStrength.bars ? "bg-emerald-600" : "bg-muted")} />
+                    <div key={i} className={"h-8 w-8 rounded-xl " + (i < profileStrength.bars ? "bg-primary" : "bg-muted")} />
                   ))}
                 </div>
               </div>
@@ -665,7 +847,7 @@ export function ProfileBraintrust({
 
           <div className="grid gap-6 lg:grid-cols-12">
             <div className="lg:col-span-12">
-              <div className="rounded-3xl border bg-card p-6">
+              <div className="rounded-3xl border bg-card p-4 sm:p-6">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-base font-semibold">Profile details</div>
@@ -697,13 +879,55 @@ export function ProfileBraintrust({
                   ) : null}
                 </div>
 
+                {hasMissingRequired ? (
+                  <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+                    <div className="font-medium">Complete required details</div>
+                    <div className="mt-1 text-xs text-destructive/80">
+                      Missing: {missingRequiredLabels.join(", ")}
+                    </div>
+                    {canEdit ? (
+                      <div className="mt-3">
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => {
+                            primeBioDraft()
+                            setBioOpen(true)
+                          }}
+                        >
+                          Complete now
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                   {canEdit ? (
-                    <div className="rounded-3xl border bg-background p-5">
-                      <div className="text-xs font-medium text-muted-foreground">Contact</div>
+                    <div
+                      className={[
+                        "rounded-3xl border bg-background p-5",
+                        hasMissingRequired ? "border-destructive/30 bg-destructive/10" : ""
+                      ].join(" ")}
+                    >
+                      <div className="text-xs font-medium text-muted-foreground">Required details</div>
                       <div className="mt-3 grid gap-1 text-sm">
-                        {candidate.email ? <div className="text-muted-foreground">{candidate.email}</div> : null}
-                        <div>{candidate.phone || "Add phone"}</div>
+                        <div className={missingName ? "text-destructive font-medium" : ""}>{candidate.name || "Add full name"}</div>
+                        <div className={missingEmail ? "text-destructive font-medium" : "text-muted-foreground"}>
+                          {candidate.email || "Add email"}
+                        </div>
+                        <div className={missingPhone ? "text-destructive font-medium" : "text-muted-foreground"}>
+                          {candidate.phone || "Add phone"}
+                        </div>
+                        <div className={missingLocation ? "text-destructive font-medium" : "text-muted-foreground"}>
+                          {candidate.location || "Add location"}
+                        </div>
+                        <div className={missingRole ? "text-destructive font-medium" : "text-muted-foreground"}>
+                          {candidate.current_role || "Add current role"}
+                        </div>
+                        <div className={missingExperience ? "text-destructive font-medium" : "text-muted-foreground"}>
+                          {candidate.total_experience || "Add total experience"}
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -720,21 +944,21 @@ export function ProfileBraintrust({
                     <div className="text-xs font-medium text-muted-foreground">Links</div>
                     <div className="mt-3 grid gap-2 text-sm">
                       {candidate.linkedin_profile ? (
-                        <a className="text-blue-600 hover:underline" href={candidate.linkedin_profile} target="_blank" rel="noopener noreferrer">
+                        <a className="text-primary hover:underline" href={normalizeExternalUrl(candidate.linkedin_profile)} target="_blank" rel="noopener noreferrer">
                           LinkedIn
                         </a>
                       ) : (
                         <div className="text-muted-foreground">{canEdit ? "Add LinkedIn" : "Not provided"}</div>
                       )}
                       {candidate.portfolio_url ? (
-                        <a className="text-blue-600 hover:underline" href={candidate.portfolio_url} target="_blank" rel="noopener noreferrer">
+                        <a className="text-primary hover:underline" href={normalizeExternalUrl(candidate.portfolio_url)} target="_blank" rel="noopener noreferrer">
                           Portfolio
                         </a>
                       ) : (
                         <div className="text-muted-foreground">{canEdit ? "Add portfolio" : "Not provided"}</div>
                       )}
                       {candidate.github_profile ? (
-                        <a className="text-blue-600 hover:underline" href={candidate.github_profile} target="_blank" rel="noopener noreferrer">
+                        <a className="text-primary hover:underline" href={normalizeExternalUrl(candidate.github_profile)} target="_blank" rel="noopener noreferrer">
                           GitHub
                         </a>
                       ) : (
@@ -756,7 +980,78 @@ export function ProfileBraintrust({
             </div>
           </div>
 
-          <div className="rounded-3xl border bg-card p-6">
+          <div className="rounded-3xl border bg-card p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-base font-semibold">Work availability</div>
+                <div className="mt-1 text-sm text-muted-foreground">Keep this updated for better job matching.</div>
+              </div>
+              {canEdit ? (
+                <Button variant="secondary" size="sm" onClick={() => setAvailabilityOpen(true)}>
+                  Edit availability
+                </Button>
+              ) : null}
+            </div>
+            {showAvailabilityCallout ? (
+              <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-4">
+                <div className="text-sm font-semibold text-destructive">Finish your availability</div>
+                <div className="mt-1 text-xs text-destructive/80">Add start date, hours, job types, and locations to be discoverable.</div>
+                {canEdit ? (
+                  <div className="mt-3">
+                    <Button variant="danger" size="sm" onClick={() => setAvailabilityOpen(true)}>
+                      Update availability
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="rounded-2xl border bg-background p-4">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className={["h-2.5 w-2.5 rounded-full", candidate.looking_for_work ? "bg-success" : "bg-muted"].join(" ")} />
+                  <span className="font-medium">{candidate.looking_for_work ? "Open to work" : "Not looking"}</span>
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {availabilityJobTypes.length ? availabilityJobTypes.map((t) => t.replace("_", " ")).join(" · ") : "Add job types"}
+                </div>
+              </div>
+              <div className="rounded-2xl border bg-background p-4">
+                <div className="text-xs font-medium text-muted-foreground">Availability</div>
+                <div className="mt-2 text-sm">
+                  {availabilityHours || "Add available hours"}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">{candidate.work_timezone || "Add timezone"}</div>
+              </div>
+              <div className="rounded-2xl border bg-background p-4">
+                <div className="text-xs font-medium text-muted-foreground">Preferred locations</div>
+                <div className="mt-2 text-sm">
+                  {availabilityLocations.length ? availabilityLocations.join(", ") : "Add preferred locations"}
+                </div>
+              </div>
+              <div className="rounded-2xl border bg-background p-4">
+                <div className="text-xs font-medium text-muted-foreground">Start date</div>
+                <div className="mt-2 text-sm">{availabilityStartLabel || "Add start date"}</div>
+              </div>
+              <div className="rounded-2xl border bg-background p-4">
+                <div className="text-xs font-medium text-muted-foreground">Compensation</div>
+                <div className="mt-2 text-sm">
+                  {candidate.current_salary ? `Current: ${candidate.current_salary}` : "Add current salary"}
+                </div>
+                <div className="mt-1 text-sm">
+                  {candidate.expected_salary ? `Expected: ${candidate.expected_salary}` : "Add expected salary"}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {candidate.notice_period ? `Notice period: ${candidate.notice_period}` : "Add notice period"}
+                </div>
+              </div>
+              <div className="rounded-2xl border bg-background p-4 md:col-span-2 lg:col-span-3">
+                <div className="text-xs font-medium text-muted-foreground">Availability notes</div>
+                <div className="mt-2 text-sm text-muted-foreground">{candidate.availability_notes || "Add availability notes"}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border bg-card p-4 sm:p-6">
             <div className="flex items-start justify-between gap-3">
               <div className="text-base font-semibold">Skills</div>
               <button
@@ -773,7 +1068,7 @@ export function ProfileBraintrust({
             <div className="mt-4 flex flex-wrap gap-2">
               {skills.length ? (
                 skills.map((s) => (
-                  <Badge key={s} className="bg-emerald-50 text-emerald-800 border-emerald-200">
+                  <Badge key={s} className="bg-primary/15 text-primary border-border/60">
                     {s}
                   </Badge>
                 ))
@@ -809,14 +1104,14 @@ export function ProfileBraintrust({
                             {p.role ? <div className="mt-1 text-xs text-muted-foreground">{p.role}</div> : null}
                             {p.description ? <div className="mt-3 whitespace-pre-wrap text-sm text-muted-foreground">{p.description}</div> : null}
                             {p.link ? (
-                              <a className="mt-3 inline-block text-sm text-blue-600 hover:underline" href={p.link} target="_blank" rel="noopener noreferrer">
+                              <a className="mt-3 inline-block text-sm text-primary hover:underline" href={p.link} target="_blank" rel="noopener noreferrer">
                                 {p.link}
                               </a>
                             ) : null}
                             {p.technologies?.length ? (
                               <div className="mt-3 flex flex-wrap gap-2">
                                 {p.technologies.slice(0, 10).map((t) => (
-                                  <Badge key={t} className="bg-emerald-50 text-emerald-900 border-emerald-200">
+                                  <Badge key={t} className="bg-primary/15 text-primary border-border/60">
                                     {t}
                                   </Badge>
                                 ))}
@@ -880,7 +1175,7 @@ export function ProfileBraintrust({
                 <div className="mt-4 flex flex-wrap gap-2">
                   {certifications.length ? (
                     certifications.slice(0, 30).map((c) => (
-                      <Badge key={c} className="bg-amber-50 text-amber-900 border-amber-200">
+                      <Badge key={c} className="bg-warning/15 text-warning border-border/60">
                         {c}
                       </Badge>
                     ))
@@ -985,56 +1280,66 @@ export function ProfileBraintrust({
             </div>
           </div>
         </div>
-      ) : (
-        <div className="rounded-3xl border bg-card p-6">
-          <div className="text-base font-semibold">Resume</div>
-          <div className="mt-2 text-sm text-muted-foreground">Upload a resume to update your profile.</div>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            {candidate.file_name ? <Badge>{candidate.file_name}</Badge> : <Badge>No resume uploaded</Badge>}
-            {candidate.file_url ? (
-              <a
-                href={candidate.file_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
-              >
-                <ExternalLink className="h-4 w-4" />
-                Open in new tab
-              </a>
-            ) : null}
-          </div>
+      ) : null}
 
-          {candidate.file_url ? (
-            <div className="mt-4 overflow-hidden rounded-2xl border bg-background">
-              <iframe title="Resume preview" src={candidate.file_url} className="h-[520px] w-full" />
+      {tab === "resume" ? (
+        <div className="grid gap-6 lg:grid-cols-12">
+          <div className="lg:col-span-8">
+            <div className="rounded-3xl border bg-card p-6">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold">Resume</div>
+                  <div className="mt-1 text-sm text-muted-foreground">Visible to anyone who can access this profile.</div>
+                </div>
+                <div className="text-xs text-muted-foreground">Preview only</div>
+              </div>
+              <div className="mt-5">
+                {resumeSignedUrl ? (
+                  <iframe title="Resume preview" src={resumeSignedUrl} className="h-[640px] w-full rounded-2xl border" />
+                ) : (
+                  <div className="rounded-2xl border border-dashed bg-card p-8 text-sm text-muted-foreground">No resume uploaded yet.</div>
+                )}
+              </div>
             </div>
-          ) : null}
-
-          <div className="mt-5">
-            <label className="inline-flex cursor-pointer">
-              <input
-                type="file"
-                accept=".pdf,.doc,.docx,.txt"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) uploadResume(f)
-                }}
-              />
-              <span className="rounded-full border bg-card px-4 py-2 text-sm hover:bg-accent">Upload</span>
-            </label>
+          </div>
+          <div className="lg:col-span-4">
+            <div className="rounded-3xl border bg-card p-6">
+              <div className="text-base font-semibold">Resume file</div>
+              <div className="mt-1 text-sm text-muted-foreground">Upload a PDF, DOC/DOCX, or TXT to keep your profile updated.</div>
+              {resumeUploadError ? <div className="mt-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm">{resumeUploadError}</div> : null}
+              {candidate.file_name ? <div className="mt-3 text-sm font-medium">{candidate.file_name}</div> : null}
+              {canEdit ? (
+                <label className="mt-4 inline-flex w-full cursor-pointer items-center justify-center rounded-full border bg-card px-4 py-2 text-sm font-medium hover:bg-accent">
+                  {resumeUploading ? "Uploading…" : "Upload resume"}
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx,.txt"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file && !resumeUploading) void uploadResume(file)
+                      e.currentTarget.value = ""
+                    }}
+                  />
+                </label>
+              ) : null}
+            </div>
           </div>
         </div>
-      )}
+      ) : null}
 
       <WorkAvailabilityModal open={availabilityOpen} onClose={() => setAvailabilityOpen(false)} />
 
       <Modal open={bioOpen} onClose={() => setBioOpen(false)} title="Edit profile">
         <div className="grid gap-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="grid gap-2">
               <div className="text-xs font-medium text-muted-foreground">Full name</div>
               <Input value={bioDraft.name} onChange={(e) => setBioDraft({ ...bioDraft, name: e.target.value })} />
+            </div>
+            <div className="grid gap-2">
+              <div className="text-xs font-medium text-muted-foreground">Email</div>
+              <Input value={bioDraft.email} onChange={(e) => setBioDraft({ ...bioDraft, email: e.target.value })} />
             </div>
             <div className="grid gap-2">
               <div className="text-xs font-medium text-muted-foreground">Phone</div>
@@ -1051,7 +1356,29 @@ export function ProfileBraintrust({
           </div>
           <div className="grid gap-2">
             <div className="text-xs font-medium text-muted-foreground">Location</div>
-            <Input value={bioDraft.location} onChange={(e) => setBioDraft({ ...bioDraft, location: e.target.value })} />
+            <div className="relative">
+              <Input
+                value={bioDraft.location}
+                onChange={(e) => setBioDraft({ ...bioDraft, location: e.target.value })}
+                onFocus={() => setBioLocFocused(true)}
+                onBlur={() => window.setTimeout(() => setBioLocFocused(false), 120)}
+                placeholder="e.g., Bengaluru"
+              />
+              {bioLocFocused && String(bioDraft.location || "").trim() && bioLocTypeahead.length ? (
+                <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-2xl border bg-background shadow-lg">
+                  {bioLocTypeahead.map((opt) => (
+                    <button
+                      key={`bioLoc:${opt}`}
+                      type="button"
+                      onClick={() => setBioDraft({ ...bioDraft, location: opt })}
+                      className="block w-full px-4 py-3 text-left text-sm hover:bg-accent"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="grid gap-2">
@@ -1065,7 +1392,53 @@ export function ProfileBraintrust({
           </div>
           <div className="grid gap-2">
             <div className="text-xs font-medium text-muted-foreground">Preferred location</div>
-            <Input value={bioDraft.preferred_location} onChange={(e) => setBioDraft({ ...bioDraft, preferred_location: e.target.value })} />
+            <div className="relative">
+              <div className="rounded-2xl border border-input bg-background px-4 py-2 focus-within:ring-2 focus-within:ring-ring/20">
+                <div className="flex flex-wrap items-center gap-2">
+                  {prefLocsDraft.map((v) => (
+                    <button
+                      key={`pl:${v}`}
+                      type="button"
+                      onClick={() => removePrefLoc(v)}
+                      className="inline-flex items-center gap-2 rounded-full border bg-accent px-3 py-1 text-xs"
+                    >
+                      <span className="max-w-[180px] truncate">{v}</span>
+                      <span className="text-muted-foreground">×</span>
+                    </button>
+                  ))}
+                  <input
+                    value={prefLocInput}
+                    onChange={(e) => setPrefLocInput(e.target.value)}
+                    onFocus={() => setPrefLocFocused(true)}
+                    onBlur={() => window.setTimeout(() => setPrefLocFocused(false), 120)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault()
+                        addPrefLoc(prefLocInput)
+                      }
+                    }}
+                    placeholder={prefLocsDraft.length ? "Add location" : "Add preferred locations"}
+                    className="min-w-[140px] flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {prefLocFocused && prefLocInput.trim() && prefLocTypeahead.length ? (
+                <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-2xl border bg-background shadow-lg">
+                  {prefLocTypeahead.map((opt) => (
+                    <button
+                      key={`prefLoc:${opt}`}
+                      type="button"
+                      onClick={() => addPrefLoc(opt)}
+                      className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-accent"
+                    >
+                      <span className="truncate">{opt}</span>
+                      <span className="text-xs text-muted-foreground">Add</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="grid gap-2">
@@ -1110,13 +1483,14 @@ export function ProfileBraintrust({
               onClick={async () => {
                 const updated = await savePatch({
                   name: bioDraft.name,
+                  email: bioDraft.email,
                   phone: bioDraft.phone || null,
                   current_role: bioDraft.current_role,
                   current_company: bioDraft.current_company || null,
                   location: bioDraft.location,
                   total_experience: bioDraft.total_experience,
                   desired_role: bioDraft.desired_role || null,
-                  preferred_location: bioDraft.preferred_location || null,
+                  preferred_location: prefLocsDraft.join(", ") || null,
                   notice_period: bioDraft.notice_period || null,
                   current_salary: bioDraft.current_salary || null,
                   expected_salary: bioDraft.expected_salary || null,
@@ -1128,6 +1502,7 @@ export function ProfileBraintrust({
                 })
                 setBioDraft({
                   name: updated.name || "",
+                  email: updated.email || "",
                   phone: updated.phone || "",
                   current_role: updated.current_role || "",
                   current_company: updated.current_company || "",
@@ -1144,6 +1519,8 @@ export function ProfileBraintrust({
                   summary: updated.summary || "",
                   location: updated.location || ""
                 })
+                setPrefLocsDraft(splitLocations(updated.preferred_location || ""))
+                setPrefLocInput("")
                 setBioOpen(false)
               }}
             >

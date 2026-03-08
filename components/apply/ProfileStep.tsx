@@ -7,6 +7,22 @@ import { Card, CardBody } from "@/components/ui/Card"
 import { Input, Textarea } from "@/components/ui/Input"
 import { Spinner } from "@/components/ui/Spinner"
 
+function isValidEmail(value: unknown) {
+  const email = typeof value === "string" ? value.trim() : ""
+  if (!email) return false
+  return /^\S+@\S+\.\S+$/.test(email)
+}
+
+function isValidPhone(value: unknown) {
+  const input = typeof value === "string" ? value.trim() : ""
+  if (!input) return false
+  const digits = input.replace(/\D+/g, "")
+  if (digits.length === 10) return true
+  if (digits.length === 12 && digits.startsWith("91")) return true
+  if (input.startsWith("+") && digits.length >= 10 && digits.length <= 15) return true
+  return false
+}
+
 export function ProfileStep({
   candidate,
   setCandidate,
@@ -32,247 +48,104 @@ export function ProfileStep({
     )
   }
 
+  const missingName = !String(candidate.name || "").trim()
+  const missingEmail = !isValidEmail(candidate.email)
+  const missingPhone = !isValidPhone(candidate.phone)
+  const isFresher = preferences.fresher === "yes"
+  const missingExpectedSalary = !String(candidate.expected_salary || "").trim()
+  const missingCurrentSalary = !isFresher && !String(candidate.current_salary || "").trim()
+  
+  const disableContinue = busy || missingName || missingEmail || missingPhone || missingExpectedSalary || missingCurrentSalary
+
   return (
     <Card>
       <CardBody className="pt-6">
-        <div className="grid gap-4">
+        <div className="grid gap-6">
           <div>
             <div className="text-base font-semibold">Autofill & review</div>
-            <div className="mt-1 text-sm text-muted-foreground">Confirm details. Missing fields are required to apply.</div>
+            <div className="mt-1 text-sm text-muted-foreground">Confirm your contact details.</div>
           </div>
 
-          <div className="grid gap-3">
+          <div className="grid gap-4">
             <div className="grid gap-2">
               <div className="text-xs font-medium text-muted-foreground">Full name *</div>
               <Input value={candidate.name || ""} onChange={(e) => setCandidate({ ...candidate, name: e.target.value })} />
             </div>
 
-            <div className="grid gap-2">
-              <div className="text-xs font-medium text-muted-foreground">Email</div>
-              <Input value={candidate.email} disabled />
-            </div>
-
-            <div className="grid gap-2">
-              <div className="text-xs font-medium text-muted-foreground">Phone</div>
-              <Input value={candidate.phone || ""} onChange={(e) => setCandidate({ ...candidate, phone: e.target.value })} />
-            </div>
-
-            <div className="grid gap-2">
-              <div className="text-xs font-medium text-muted-foreground">Desired role</div>
-              <Input
-                value={candidate.desired_role || ""}
-                onChange={(e) => setCandidate({ ...candidate, desired_role: e.target.value })}
-                placeholder="e.g. Dispatcher"
-              />
-            </div>
-
-            <div className="grid gap-2">
-              <div className="text-xs font-medium text-muted-foreground">Current company</div>
-              <Input
-                value={candidate.current_company || ""}
-                onChange={(e) => setCandidate({ ...candidate, current_company: e.target.value })}
-                placeholder="e.g. Delhivery"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Current role *</div>
-                <Input
-                  value={candidate.current_role || ""}
-                  onChange={(e) => setCandidate({ ...candidate, current_role: e.target.value })}
-                  placeholder="Driver, Dispatcher, Fleet Manager"
+                <div className="text-xs font-medium text-muted-foreground">Email *</div>
+                <Input value={candidate.email || ""} onChange={(e) => setCandidate({ ...candidate, email: e.target.value })} />
+              </div>
+
+              <div className="grid gap-2">
+                <div className="text-xs font-medium text-muted-foreground">Phone *</div>
+                <Input value={candidate.phone || ""} onChange={(e) => setCandidate({ ...candidate, phone: e.target.value })} />
+                {candidate.phone && !isValidPhone(candidate.phone) ? (
+                  <div className="text-xs text-muted-foreground">Use 10 digits or +91XXXXXXXXXX.</div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t pt-6">
+            <div>
+              <div className="text-base font-semibold">Work availability</div>
+              <div className="mt-1 text-sm text-muted-foreground">Set your job search preferences.</div>
+            </div>
+
+            <div className="mt-4 grid gap-4">
+              <div className="flex items-center justify-between gap-3 rounded-2xl border bg-accent/30 p-4">
+                <div className="text-sm font-medium text-foreground">Open to work</div>
+                <input
+                  type="checkbox"
+                  checked={candidate.looking_for_work !== false}
+                  onChange={(e) => setCandidate({ ...candidate, looking_for_work: e.target.checked })}
+                  className="h-5 w-5 rounded border-input bg-card text-primary focus:ring-ring/20"
                 />
               </div>
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Total experience *</div>
-                <Input
-                  value={candidate.total_experience || ""}
-                  onChange={(e) => setCandidate({ ...candidate, total_experience: e.target.value })}
-                  placeholder="e.g. 3 years"
-                />
-              </div>
-            </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Location *</div>
-                <Input value={candidate.location || ""} onChange={(e) => setCandidate({ ...candidate, location: e.target.value })} />
-              </div>
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Preferred location</div>
-                <Input
-                  value={candidate.preferred_location || ""}
-                  onChange={(e) => setCandidate({ ...candidate, preferred_location: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Industry</div>
-                <Input
-                  value={preferences.industry || ""}
+              <div className="flex items-center justify-between gap-3 rounded-2xl border bg-accent/30 p-4">
+                <div className="text-sm font-medium text-foreground">Are you a fresher?</div>
+                <input
+                  type="checkbox"
+                  checked={isFresher}
                   onChange={(e) => {
-                    const next = { ...preferences, industry: e.target.value }
+                    const next = { ...preferences, fresher: e.target.checked ? "yes" : "no" }
                     setCandidate({ ...candidate, tags: mapToTags(next) })
                   }}
-                  placeholder="Logistics, Transportation"
-                />
-              </div>
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Logistics background</div>
-                <select
-                  value={preferences.logistics_background || "no"}
-                  onChange={(e) => {
-                    const next = { ...preferences, logistics_background: e.target.value }
-                    setCandidate({ ...candidate, tags: mapToTags(next) })
-                  }}
-                  className="h-11 w-full rounded-xl border border-input bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20"
-                >
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </div>
-
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Current salary</div>
-                <Input
-                  value={candidate.current_salary || ""}
-                  onChange={(e) => setCandidate({ ...candidate, current_salary: e.target.value })}
-                  placeholder="e.g. ₹25,000 / month"
+                  className="h-5 w-5 rounded border-input bg-card text-primary focus:ring-ring/20"
                 />
               </div>
 
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Expected salary</div>
-                <Input
-                  value={candidate.expected_salary || ""}
-                  onChange={(e) => setCandidate({ ...candidate, expected_salary: e.target.value })}
-                  placeholder="e.g. ₹35,000 / month"
-                />
-              </div>
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Open to shifts</div>
-                <select
-                  value={preferences.open_to_shift || "no"}
-                  onChange={(e) => {
-                    const next = { ...preferences, open_to_shift: e.target.value }
-                    setCandidate({ ...candidate, tags: mapToTags(next) })
-                  }}
-                  className="h-11 w-full rounded-xl border border-input bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20"
-                >
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </div>
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Open for a job</div>
-                <select
-                  value={preferences.open_for_job || "yes"}
-                  onChange={(e) => {
-                    const next = { ...preferences, open_for_job: e.target.value }
-                    setCandidate({ ...candidate, tags: mapToTags(next) })
-                  }}
-                  className="h-11 w-full rounded-xl border border-input bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20"
-                >
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <div className="text-xs font-medium text-muted-foreground">Summary</div>
-              <Textarea value={candidate.summary || ""} onChange={(e) => setCandidate({ ...candidate, summary: e.target.value })} />
-            </div>
-
-            <div className="grid gap-3">
-              <div className="text-sm font-semibold">Parsed highlights</div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {!isFresher && (
+                  <div className="grid gap-2">
+                    <div className="text-xs font-medium text-muted-foreground">Current CTC (Monthly) *</div>
+                    <Input
+                      value={candidate.current_salary || ""}
+                      onChange={(e) => setCandidate({ ...candidate, current_salary: e.target.value })}
+                      placeholder="e.g. ₹25,000"
+                    />
+                  </div>
+                )}
                 <div className="grid gap-2">
-                  <div className="text-xs font-medium text-muted-foreground">Highest qualification</div>
+                  <div className="text-xs font-medium text-muted-foreground">Expected CTC (Monthly) *</div>
                   <Input
-                    value={candidate.highest_qualification || ""}
-                    onChange={(e) => setCandidate({ ...candidate, highest_qualification: e.target.value })}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <div className="text-xs font-medium text-muted-foreground">Degree</div>
-                  <Input value={candidate.degree || ""} onChange={(e) => setCandidate({ ...candidate, degree: e.target.value })} />
-                </div>
-                <div className="grid gap-2">
-                  <div className="text-xs font-medium text-muted-foreground">Specialization</div>
-                  <Input
-                    value={candidate.specialization || ""}
-                    onChange={(e) => setCandidate({ ...candidate, specialization: e.target.value })}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <div className="text-xs font-medium text-muted-foreground">University</div>
-                  <Input value={candidate.university || ""} onChange={(e) => setCandidate({ ...candidate, university: e.target.value })} />
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Technical skills</div>
-                <Textarea
-                  value={Array.isArray(candidate.technical_skills) ? candidate.technical_skills.join(", ") : ""}
-                  onChange={(e) =>
-                    setCandidate({
-                      ...candidate,
-                      technical_skills: e.target.value
-                        .split(",")
-                        .map((s) => s.trim())
-                        .filter(Boolean)
-                    })
-                  }
-                  placeholder="e.g. TMS, WMS, Route planning, Excel"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="grid gap-2">
-                  <div className="text-xs font-medium text-muted-foreground">Languages</div>
-                  <Textarea
-                    value={Array.isArray(candidate.languages_known) ? candidate.languages_known.join(", ") : ""}
-                    onChange={(e) =>
-                      setCandidate({
-                        ...candidate,
-                        languages_known: e.target.value
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter(Boolean)
-                      })
-                    }
-                    placeholder="e.g. Hindi, English"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <div className="text-xs font-medium text-muted-foreground">Soft skills</div>
-                  <Textarea
-                    value={Array.isArray(candidate.soft_skills) ? candidate.soft_skills.join(", ") : ""}
-                    onChange={(e) =>
-                      setCandidate({
-                        ...candidate,
-                        soft_skills: e.target.value
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter(Boolean)
-                      })
-                    }
-                    placeholder="e.g. Team management, Communication"
+                    value={candidate.expected_salary || ""}
+                    onChange={(e) => setCandidate({ ...candidate, expected_salary: e.target.value })}
+                    placeholder="e.g. ₹35,000"
                   />
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={onBack} disabled={busy} className="flex-1">
+          <div className="flex gap-2 sticky bottom-0 bg-card pt-2 mt-auto sm:relative sm:pt-0 sm:mt-0">
+            <Button variant="secondary" onClick={onBack} disabled={busy} className="flex-1 h-12 rounded-xl">
               Back
             </Button>
-            <Button onClick={onContinue} disabled={busy} className="flex-1">
+            <Button onClick={onContinue} disabled={disableContinue} className="flex-1 h-12 rounded-xl shadow-lg shadow-primary/20">
               {busy ? <Spinner /> : null}
               Continue
             </Button>

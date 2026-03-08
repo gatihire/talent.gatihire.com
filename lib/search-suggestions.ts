@@ -1,0 +1,418 @@
+export const BOARD_LOCATION_PRESETS = [
+  "Anywhere in India",
+  "Delhi NCR",
+  "Mumbai",
+  "Bengaluru",
+  "Hyderabad",
+  "Chennai",
+  "Pune",
+  "Ahmedabad",
+  "Kolkata",
+  "Jaipur",
+  "Surat",
+  "Indore",
+  "Lucknow",
+  "Chandigarh",
+  "Vadodara",
+  "Nagpur",
+  "Bhopal",
+  "Visakhapatnam",
+  "Kochi",
+  "Coimbatore",
+  "Ludhiana",
+  "Gurgaon",
+  "Noida",
+  "Greater Noida",
+  "Ghaziabad",
+  "Faridabad",
+  "Navi Mumbai",
+  "Thane",
+  "Pune Metropolitan",
+  "Mysuru",
+  "Trivandrum",
+  "Nashik",
+  "Aurangabad",
+  "Ranchi",
+  "Patna",
+  "Varanasi",
+  "Srinagar",
+  "Jamshedpur",
+  "Bhubaneswar",
+  "Raipur",
+  "Guwahati",
+  "Port Cities (Mumbai, Chennai, Kolkata, Cochin)",
+  "Airport Hubs (Delhi, Bangalore, Hyderabad)",
+  "Special Economic Zones (SEZ)",
+  "Industrial Corridors",
+  "BIMARU Region",
+  "Tier 2 Cities",
+  "Tier 3 Cities",
+]
+
+export const MIGRATION_JOB_TITLES = [
+  // Senior Management
+  "Chief Operating Officer - Logistics",
+  "Vice President - Supply Chain",
+  "Director - Operations",
+  "Director - Logistics",
+  "Director - Warehouse",
+  "Chief Logistics Officer",
+  
+  // Regional & Zone Management
+  "Regional Manager - Operations",
+  "Zonal Manager - Logistics",
+  "Area Operations Manager",
+  "Regional Head - Supply Chain",
+  "Zone In-charge",
+  
+  // Operations Management
+  "Operations Manager",
+  "Logistics Manager",
+  "Supply Chain Manager",
+  "Fleet Manager",
+  "Warehouse Manager",
+  "Branch Manager",
+  "Hub Manager",
+  "General Manager – Operations",
+  "Operations Head",
+  "Logistics Head",
+  
+  // Assistant & Deputy Roles
+  "Assistant Manager – Logistics",
+  "Deputy Manager Operations",
+  "Assistant Manager - Warehouse",
+  "Assistant Manager - Fleet",
+  "Senior Executive - Operations",
+  "Senior Executive - Logistics",
+  
+  // Transportation & Fleet
+  "Transport Manager",
+  "Fleet Operations Manager",
+  "Transport Operations Manager",
+  "Fleet Coordinator",
+  "Fleet Maintenance Manager",
+  "Transport Supervisor",
+  "Fleet Incharge",
+  "Fleet Executive",
+  "Transport Executive",
+  "Traffic Manager",
+  "Vehicle Maintenance Manager",
+  "Driver Supervisor",
+  "Fuel Manager",
+  "Driver Recruitment Manager",
+  
+  // Warehouse & Storage
+  "Warehouse Manager",
+  "Warehouse Operations Manager",
+  "Warehouse Assistant Manager",
+  "Warehouse Supervisor",
+  "Warehouse Incharge",
+  "Store Manager",
+  "Store Incharge",
+  "Inventory Manager",
+  "Warehouse Executive",
+  "Cold Storage Manager",
+  "Customs Warehouse Manager",
+  
+  // Distribution & Dispatch
+  "Distribution Manager",
+  "Dispatch Manager",
+  "Dispatch Supervisor",
+  "Dispatch Executive",
+  "Last Mile Manager",
+  "Route Optimization Manager",
+  "Hub Executive",
+  "Hub Associate",
+  
+  // Planning & Coordination
+  "Logistics Coordinator",
+  "Operations Coordinator",
+  "Supply Chain Coordinator",
+  "Logistics Supervisor",
+  "Operations Supervisor",
+  "Operations Executive",
+  "Operation Incharge",
+  "Operations Assistant",
+  "Logistics Assistant",
+  "Operation Assistant",
+  
+  // Specialized Roles
+  "Procurement Manager",
+  "Vendor Manager",
+  "Supplier Development Manager",
+  "Vendor Relationship Manager",
+  "Quality Control Manager",
+  "Quality Assurance Executive",
+  "MIS Manager",
+  "MIS Executive",
+  "Tracking Executive",
+  "Billing Executive",
+  "Billing Manager",
+  "Documentation Executive",
+  "Documentation Manager",
+  "Compliance Manager",
+  "Safety Manager",
+  "Sustainability Manager",
+  
+  // Technology & Systems
+  "WMS Administrator",
+  "TMS Specialist",
+  "ERP Specialist",
+  "SAP Consultant - Logistics",
+  "Systems Administrator",
+  "IT Support - Logistics",
+  
+  // Customer Service & Support
+  "Customer Service Executive",
+  "Customer Service Manager",
+  "Relationship Manager",
+  "Account Manager - Logistics",
+  "Sales Executive - Logistics",
+  "Business Development Manager",
+  
+  // Field & Ground Level
+  "Delivery Executive",
+  "Warehouse Associate",
+  "Warehouse Staff",
+  "Loading Supervisor",
+  "Unloading Supervisor",
+  "Material Handler",
+  "Forklift Operator",
+  "Picker & Packer",
+  "Data Entry Operator",
+  "Computer Operator",
+  "Back Office Executive",
+  "Administrative Executive",
+  "Security Supervisor",
+  "Housekeeping Supervisor",
+  
+  // Specialized Logistics
+  "Cold Chain Manager",
+  "E-commerce Logistics Manager",
+  "Reverse Logistics Manager",
+  "International Logistics Manager",
+  "Freight Forwarding Manager",
+  "Customs Broker",
+  "Port Operations Manager",
+  "Airport Logistics Manager",
+  "Express Logistics Manager",
+  "Parcel Manager",
+]
+
+export const MIGRATION_TOP_JOB_TITLES = [
+  "Operations Manager",
+  "Logistics Manager",
+  "Supply Chain Manager",
+  "Fleet Manager",
+  "Warehouse Manager",
+  "Branch Manager",
+  "Transport Manager",
+  "Logistics Coordinator",
+  "Warehouse Supervisor",
+  "Inventory Manager",
+  "Operations Executive",
+  "Dispatch Manager",
+  "Dispatch Executive",
+  "MIS Executive",
+  "Tracking Executive",
+  "Billing Executive",
+  "Documentation Executive",
+]
+
+export const MIGRATION_SKILLS = [
+  // Software & Systems
+  "SAP",
+  "SAP SD",
+  "SAP MM",
+  "SAP SCM",
+  "SAP TM",
+  "SAP Analytics Cloud",
+  "ERP",
+  "TMS (Transportation Management System)",
+  "WMS (Warehouse Management System)",
+  "MIS",
+  "Excel",
+  "Advanced Excel",
+  "Power BI",
+  "Tableau",
+  "SQL",
+  "MS Office",
+  "Word",
+  "PowerPoint",
+  "Outlook",
+  "GPS Tracking",
+  "Google Maps API",
+  "IoT Devices",
+  "Blockchain (Supply Chain)",
+  "Cloud Computing",
+  
+  // Logistics Operations
+  "Logistics Management",
+  "Supply Chain Management",
+  "Inventory Management",
+  "Fleet Management",
+  "Warehouse Management",
+  "Transportation Management",
+  "Distribution Management",
+  "Last Mile Delivery",
+  "Route Planning",
+  "Route Optimization",
+  "Vehicle Scheduling",
+  "Load Optimization",
+  "Consolidation",
+  
+  "Material Handling",
+  "Loading",
+  "Unloading",
+  "Packaging",
+  "Picking & Packing",
+  "Putaway Operations",
+  "FIFO/LIFO",
+  "Cross-Docking",
+  "Sortation",
+  
+  // Specialized Logistics
+  "Cold Chain Logistics",
+  "E-commerce Logistics",
+  "Reverse Logistics",
+  "3PL Management",
+  "4PL Management",
+  "International Freight Forwarding",
+  "Customs Clearance",
+  "Export Import",
+  "Hazmat Logistics",
+  "Pharma Logistics",
+  "FMCG Logistics",
+  
+  // Documentation & Compliance
+  "Documentation",
+  "E-way Bill",
+  "GST Compliance",
+  "Customs Documentation",
+  "POD (Proof of Delivery)",
+  "GRN (Goods Receipt Note)",
+  "Invoice Management",
+  "Billing",
+  "Compliance",
+  "Regulatory Knowledge",
+  "Audit & Compliance",
+  "Legal Documentation",
+  
+  // Planning & Analysis
+  "Demand Planning",
+  "Forecasting",
+  "Network Optimization",
+  "Cost Analysis",
+  "Cost Reduction",
+  "Data Analysis",
+  "Reporting",
+  "KPI Tracking",
+  "Performance Management",
+  "Process Improvement",
+  "Lean Management",
+  "Six Sigma",
+  
+  // Shipping & Freight
+  "FTL (Full Truck Load)",
+  "PTL (Part Truck Load)",
+  "LTL (Less Than Truckload)",
+  "Rail Logistics",
+  "Air Freight",
+  "Sea Freight",
+  "Multimodal Transport",
+  "Freight Negotiation",
+  "Rate Negotiation",
+  "Carrier Management",
+  
+  // Warehouse Types
+  "General Warehouse Management",
+  "Cold Storage Operations",
+  "Bonded Warehouse",
+  "Distribution Center Management",
+  "Fulfillment Center",
+  "Customs House Operations",
+  
+  // Vehicle & Fleet
+  "Vehicle Tracking",
+  "Fleet Maintenance",
+  "Vehicle Health Monitoring",
+  "Fuel Management",
+  "Driver Management",
+  "Vehicle Documentation",
+  "Insurance Management",
+  "Road Compliance",
+  
+  // Coordination & Communication
+  "Coordination",
+  "Communication",
+  "Stakeholder Management",
+  "Vendor Management",
+  "Procurement",
+  "Negotiation",
+  "Team Management",
+  "Leadership",
+  "Customer Service",
+  "Problem-solving",
+  
+  // Quality & Safety
+  "Quality Control",
+  "Quality Assurance",
+  "Safety Management",
+  "Incident Management",
+  "Loss Prevention",
+  "Damage Control",
+  "Sustainability",
+  "Environmental Compliance",
+  
+  // Emerging Technologies
+  "AI in Logistics",
+  "Machine Learning",
+  "Predictive Analytics",
+  "Automation",
+  "Robotics",
+  "RFID",
+  "Barcode Management",
+  "QR Code Integration",
+]
+
+export const MIGRATION_TOP_SKILLS = [
+  "MIS",
+  "SAP",
+  "Excel",
+  "ERP",
+  "GPS Tracking",
+  "Tally",
+  "TMS",
+  "WMS",
+  "MS Office",
+  "Dispatch",
+  "Delivery",
+  "Tracking",
+  "Documentation",
+  "Compliance",
+  "GST Compliance",
+  "E-way Bill",
+  "Vendor Management",
+  "Route Planning",
+]
+
+export const MIGRATION_ALL_SUGGESTIONS = Array.from(new Set([...MIGRATION_TOP_JOB_TITLES, ...MIGRATION_JOB_TITLES, ...MIGRATION_TOP_SKILLS, ...MIGRATION_SKILLS]))
+
+export function getSuggestionMatches(input: string, suggestions: string[], limit = 10) {
+  const q = input.trim().toLowerCase()
+  if (!q) return suggestions.slice(0, Math.max(1, limit))
+
+  const scored = suggestions
+    .map((s, idx) => {
+      const v = s.toLowerCase()
+      const pos = v.indexOf(q)
+      if (pos === -1) return null
+      const wordPos = v.indexOf(` ${q}`)
+      const score = pos === 0 ? 0 : wordPos !== -1 ? 1 : 2
+      return { s, score, pos, idx }
+    })
+    .filter(Boolean) as Array<{ s: string; score: number; pos: number; idx: number }>
+
+  scored.sort((a, b) => a.score - b.score || a.pos - b.pos || a.idx - b.idx)
+  return scored.slice(0, Math.max(1, limit)).map((x) => x.s)
+}

@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await supabaseAdmin
     .from("candidates")
-    .select("looking_for_work,open_job_types,available_start_time,available_end_time,work_timezone,preferred_location,work_availability_updated_at")
+    .select("looking_for_work,open_job_types,available_start_time,available_end_time,work_timezone,preferred_location,work_availability_updated_at,current_salary,expected_salary,notice_period,available_start_date,availability_notes")
     .or(`auth_user_id.eq.${user.id},email.eq.${user.email}`)
     .maybeSingle()
 
@@ -36,6 +36,11 @@ export async function PUT(request: NextRequest) {
     available_end_time: typeof body.available_end_time === "string" ? body.available_end_time : null,
     work_timezone: typeof body.work_timezone === "string" ? body.work_timezone : null,
     preferred_location: typeof body.preferred_location === "string" ? body.preferred_location : null,
+    current_salary: typeof body.current_salary === "string" ? body.current_salary : null,
+    expected_salary: typeof body.expected_salary === "string" ? body.expected_salary : null,
+    notice_period: typeof body.notice_period === "string" ? body.notice_period : null,
+    available_start_date: typeof body.available_start_date === "string" ? body.available_start_date : null,
+    availability_notes: typeof body.availability_notes === "string" ? body.availability_notes : null,
     work_availability_updated_at: nowIso(),
     updated_at: nowIso()
   }
@@ -52,7 +57,7 @@ export async function PUT(request: NextRequest) {
       .from("candidates")
       .update(patch)
       .eq("id", existing.id)
-      .select("looking_for_work,open_job_types,available_start_time,available_end_time,work_timezone,preferred_location,work_availability_updated_at")
+      .select("looking_for_work,open_job_types,available_start_time,available_end_time,work_timezone,preferred_location,work_availability_updated_at,current_salary,expected_salary,notice_period,available_start_date,availability_notes")
       .single()
     if (updateErr) return NextResponse.json({ error: "Failed to update" }, { status: 500 })
     return NextResponse.json({ availability: updated })
@@ -73,7 +78,7 @@ export async function PUT(request: NextRequest) {
       updated_at: nowIso(),
       ...patch
     })
-    .select("looking_for_work,open_job_types,available_start_time,available_end_time,work_timezone,preferred_location,work_availability_updated_at")
+    .select("looking_for_work,open_job_types,available_start_time,available_end_time,work_timezone,preferred_location,work_availability_updated_at,current_salary,expected_salary,notice_period,available_start_date,availability_notes")
     .single()
 
   if (createErr) return NextResponse.json({ error: "Failed to create candidate" }, { status: 500 })

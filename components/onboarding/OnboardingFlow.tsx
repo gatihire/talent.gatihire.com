@@ -91,7 +91,7 @@ export function OnboardingFlow() {
   const search = useSearchParams()
   const { session, loading } = useSupabaseSession()
   const accessToken = session?.access_token
-  const returnTo = useMemo(() => sanitizeReturnTo(search.get("returnTo"), "/jobs"), [search])
+  const returnTo = useMemo(() => sanitizeReturnTo(search.get("returnTo"), "/dashboard/jobs"), [search])
 
   const [step, setStep] = useState<Step>("gate")
   const [busy, setBusy] = useState(false)
@@ -136,6 +136,38 @@ export function OnboardingFlow() {
       setCandidateLoading(false)
     }
   }, [accessToken])
+
+  useEffect(() => {
+    if (!accessToken || !parsingJob?.id) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const poll = async () => {
+      if (stopped) return
+      try {
+        const res = await fetch(`/api/candidate/resume/status?parsing_job_id=${parsingJob.id}`, {
+          headers: bearerHeaders(accessToken)
+        })
+        const data = await res.json()
+        if (res.ok && data?.parsingJob) {
+          const next = data.parsingJob as ParsingJob
+          setParsingJob(next)
+          if (next.status === "completed" || next.status === "failed") {
+            await fetchProfile()
+            return
+          }
+        }
+      } catch {
+      }
+      timer = setTimeout(poll, 2000)
+    }
+
+    poll()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [accessToken, parsingJob?.id, fetchProfile])
 
   useEffect(() => {
     if (!accessToken) return
@@ -216,6 +248,23 @@ export function OnboardingFlow() {
     }
   }
 
+  const parseExisting = async () => {
+    if (!accessToken) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/candidate/resume/reparse", { method: "POST", headers: bearerHeaders(accessToken) })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to start parsing")
+      if (data?.parsingJob) setParsingJob(data.parsingJob)
+      setStep("profile")
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const saveGate = async (next: LogisticsConnected) => {
     if (!accessToken) return
     if (!candidate) {
@@ -287,13 +336,11 @@ export function OnboardingFlow() {
         headers: bearerHeaders(accessToken, { "Content-Type": "application/json" }),
         body: JSON.stringify({
           name: next.name,
+          email: next.email,
           phone: next.phone,
-          current_role: next.current_role,
-          total_experience: next.total_experience,
-          location: next.location,
-          preferred_location: next.preferred_location,
-          desired_role: next.desired_role,
-          summary: next.summary,
+          looking_for_work: next.looking_for_work,
+          current_salary: next.current_salary,
+          expected_salary: next.expected_salary,
           tags: next.tags
         })
       })
@@ -337,7 +384,7 @@ export function OnboardingFlow() {
             </Badge>
           ))}
           <div className="ml-auto">
-            <Button variant="ghost" size="sm" onClick={() => router.push("/jobs")}>
+            <Button variant="ghost" size="sm" onClick={() => router.push("/dashboard/jobs")}>
               Skip for now
             </Button>
           </div>
@@ -387,6 +434,7 @@ export function OnboardingFlow() {
             parsingJob={parsingJob}
             onError={setError}
             onUploadAndParse={uploadAndParse}
+            onParseExisting={parseExisting}
             onSkip={() => setStep("profile")}
           />
         ) : null}

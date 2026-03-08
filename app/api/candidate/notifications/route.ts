@@ -1,25 +1,45 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { getAuthedUser } from "@/lib/apiServerAuth"
+import { cache } from "@/lib/cache"
 
 export const runtime = "nodejs"
 
 async function getCandidateId(user: { id: string; email: string }) {
-  const { data: candidate, error } = await supabaseAdmin
+  const { data: byAuth, error: authErr } = await supabaseAdmin
     .from("candidates")
     .select("id")
-    .or(`auth_user_id.eq.${user.id},email.eq.${user.email}`)
+    .eq("auth_user_id", user.id)
     .maybeSingle()
-  if (error) throw new Error("Failed to load candidate")
-  return candidate?.id ? String(candidate.id) : null
+  if (authErr) throw new Error("Failed to load candidate")
+  if (byAuth?.id) return String(byAuth.id)
+
+  const email = String(user.email || "").trim().toLowerCase()
+  if (!email) return null
+
+  const { data: byEmail, error: emailErr } = await supabaseAdmin
+    .from("candidates")
+    .select("id")
+    .eq("email", email)
+    .maybeSingle()
+  if (emailErr) throw new Error("Failed to load candidate")
+  return byEmail?.id ? String(byEmail.id) : null
 }
 
 export async function GET(request: NextRequest) {
   const { user } = await getAuthedUser(request)
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
+  const cacheKey = `candidate:notifications:${user.id}`
+  const cached = await cache.get(cacheKey)
+  if (cached) return NextResponse.json(cached)
+
   const candidateId = await getCandidateId(user)
-  if (!candidateId) return NextResponse.json({ notifications: [], unreadCount: 0 })
+  if (!candidateId) {
+    const payload = { notifications: [], unreadCount: 0 }
+    await cache.set(cacheKey, payload, 15)
+    return NextResponse.json(payload)
+  }
 
   const { data, error } = await supabaseAdmin
     .from("candidate_notifications")
@@ -31,7 +51,9 @@ export async function GET(request: NextRequest) {
   if (error) return NextResponse.json({ error: "Failed to load notifications" }, { status: 500 })
 
   const unreadCount = (data || []).reduce((acc: number, n: any) => (n?.is_read ? acc : acc + 1), 0)
-  return NextResponse.json({ notifications: data || [], unreadCount })
+  const payload = { notifications: data || [], unreadCount }
+  await cache.set(cacheKey, payload, 15)
+  return NextResponse.json(payload)
 }
 
 export async function POST(request: NextRequest) {
@@ -54,6 +76,7 @@ export async function POST(request: NextRequest) {
       .eq("candidate_id", candidateId)
       .eq("is_read", false)
     if (error) return NextResponse.json({ error: "Failed to update" }, { status: 500 })
+    await cache.del(`candidate:notifications:${user.id}`)
     return NextResponse.json({ success: true })
   }
 
@@ -66,5 +89,6 @@ export async function POST(request: NextRequest) {
     .eq("candidate_id", candidateId)
     .eq("id", id)
   if (error) return NextResponse.json({ error: "Failed to update" }, { status: 500 })
+  await cache.del(`candidate:notifications:${user.id}`)
   return NextResponse.json({ success: true })
 }

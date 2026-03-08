@@ -2,6 +2,7 @@ import { notFound } from "next/navigation"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import type { Job, JobSection } from "@/lib/types"
 import { JobApplyPageClient } from "@/components/jobs/JobApplyPageClient"
+import { PublicTopNav } from "@/components/public/PublicTopNav"
 
 export const runtime = "nodejs"
 export const revalidate = 0
@@ -49,8 +50,11 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   }
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-4 py-10">
-      <JobApplyPageClient job={job} client={client} sections={sections} />
-    </main>
+    <>
+      <PublicTopNav minimal />
+      <main className="mx-auto w-full max-w-6xl px-4 py-10">
+        <JobApplyPageClient job={job} client={client} sections={sections} />
+      </main>
+    </>
   )
 }

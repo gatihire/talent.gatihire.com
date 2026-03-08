@@ -9,3 +9,6 @@ yarn-error.log*
 .pnpm-debug.log*
 .DS_Store
 **/.DS_Store
+
+# Sentry Config File
+.env.sentry-build-plugin

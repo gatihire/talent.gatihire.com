@@ -73,11 +73,11 @@ export function ReviewStep({
             <Textarea value={coverLetter} onChange={(e) => setCoverLetter(e.target.value)} placeholder="Add a note for the recruiter" />
           </div>
 
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={onBack} disabled={busy} className="flex-1">
+          <div className="flex gap-2 sticky bottom-0 bg-card pt-2 mt-auto sm:relative sm:pt-0 sm:mt-0">
+            <Button variant="secondary" onClick={onBack} disabled={busy} className="flex-1 h-12 rounded-xl">
               Back
             </Button>
-            <Button onClick={onSubmit} disabled={busy || !!disabledReason} className="flex-1">
+            <Button onClick={onSubmit} disabled={busy || !!disabledReason} className="flex-1 h-12 rounded-xl shadow-lg shadow-primary/20">
               {busy ? <Spinner /> : null}
               Submit application
             </Button>

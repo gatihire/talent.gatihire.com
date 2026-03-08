@@ -7,7 +7,7 @@ export const runtime = "nodejs"
 export async function GET(request: NextRequest) {
   const redirectTo = request.nextUrl.clone()
   const code = redirectTo.searchParams.get("code")
-  const returnTo = redirectTo.searchParams.get("returnTo") || "/jobs"
+  const returnTo = redirectTo.searchParams.get("returnTo") || "/dashboard/jobs"
 
   if (!code) {
     redirectTo.pathname = "/auth/login"

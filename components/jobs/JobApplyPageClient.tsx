@@ -1,12 +1,13 @@
 "use client"
 
-import { useMemo, useRef } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import type { Job, JobSection } from "@/lib/types"
 import { Button } from "@/components/ui/Button"
 import { Badge } from "@/components/ui/Badge"
 import { JobApplyForm } from "@/components/jobs/JobApplyForm"
 import { useSupabaseSession } from "@/lib/useSupabaseSession"
+import { AuthModal } from "@/components/auth/AuthModal"
 import { Briefcase, CalendarDays, Clock, Flame, Globe2, GraduationCap, MapPin, ShieldCheck, Users, Wallet } from "lucide-react"
 
 type ClientLite = {
@@ -53,14 +54,24 @@ export function JobApplyPageClient({
   job,
   client,
   sections,
+  backHref = "/jobs",
 }: {
   job: Job & { client_id?: string | null; client_name?: string | null }
   client: ClientLite | null
   sections: JobSection[]
+  backHref?: string
 }) {
   const { session } = useSupabaseSession()
   const applyRef = useRef<HTMLDivElement | null>(null)
   const clientName = client?.name || job.client_name || "Client"
+
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login")
+
+  const openAuth = useCallback((mode: "login" | "signup") => {
+    setAuthMode(mode)
+    setAuthOpen(true)
+  }, [])
 
   const visibleSections = useMemo(() => {
     const rows = Array.isArray(sections) ? sections : []
@@ -115,7 +126,7 @@ export function JobApplyPageClient({
   return (
     <div className="pb-24">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <Link href="/jobs" className="text-sm text-muted-foreground hover:text-foreground">
+        <Link href={backHref} className="text-sm text-muted-foreground hover:text-foreground">
           ← Back to jobs
         </Link>
         <div className="flex items-center gap-2">
@@ -124,22 +135,10 @@ export function JobApplyPageClient({
               View {clientName}
             </Link>
           ) : null}
-          {session ? (
-            <Link href="/dashboard">
-              <Button variant="secondary" size="sm">Dashboard</Button>
-            </Link>
-          ) : (
-            <>
-              <Link href="/jobs?login=1">
-                <Button variant="secondary" size="sm">Log in</Button>
-              </Link>
-              <Link href="/jobs?createProfile=1">
-                <Button size="sm">Create profile</Button>
-              </Link>
-            </>
-          )}
         </div>
       </div>
+
+      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} defaultMode={authMode} />
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
         <div className="lg:col-span-7">

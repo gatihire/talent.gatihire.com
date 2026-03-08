@@ -9,6 +9,10 @@ function nowIso() {
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const adminKey = process.env.BOARD_APP_ADMIN_KEY || ""
+  const provided = request.headers.get("x-board-admin-key") || ""
+  if (!adminKey || provided !== adminKey) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+
   const { user } = await getAuthedUser(request)
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 

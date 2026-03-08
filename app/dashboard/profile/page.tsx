@@ -17,6 +17,8 @@ export default function ProfilePage() {
     null
 
   const [candidate, setCandidate] = useState<Candidate | null>(null)
+  const [workItems, setWorkItems] = useState<any[]>([])
+  const [educationItems, setEducationItems] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -25,12 +27,14 @@ export default function ProfilePage() {
     let active = true
     setBusy(true)
     setError(null)
-    fetch("/api/candidate/profile", { headers: bearerHeaders(accessToken) })
+    fetch("/api/candidate/profile?details=1", { headers: bearerHeaders(accessToken) })
       .then((r) => r.json())
       .then((data) => {
         if (!active) return
         if (data?.error) throw new Error(data.error)
         setCandidate(data.candidate)
+        setWorkItems(data.workItems || [])
+        setEducationItems(data.educationItems || [])
       })
       .catch((e: any) => {
         if (!active) return
@@ -58,6 +62,8 @@ export default function ProfilePage() {
       candidate={candidate}
       onCandidateUpdated={(c) => setCandidate(c as any)}
       googleAvatarUrl={typeof googleAvatarUrl === "string" ? googleAvatarUrl : undefined}
+      initialWorkItems={workItems}
+      initialEducationItems={educationItems}
     />
   )
 }
