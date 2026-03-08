@@ -1,15 +1,22 @@
-app = "board-worker"
-primary_region = "bom"
+# fly.toml app configuration file generated for board-worker on 2026-03-08T21:14:46+05:30
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-[build]
-  dockerfile = "Dockerfile.worker"
-
-[env]
-  WORKER_ID = "fly-prod-1"
-  NODE_ENV = "production"
+app = 'board-worker'
+primary_region = 'bom'
 
 [experimental]
-  auto_stop_machines = false   # always on
-  auto_start_machines = true
 
-# No http service required; this is a background worker
+[build]
+  dockerfile = 'Dockerfile.worker'
+
+[env]
+  NODE_ENV = 'production'
+  WORKER_ID = 'fly-prod-1'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512
