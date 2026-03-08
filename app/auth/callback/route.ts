@@ -15,10 +15,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(redirectTo)
   }
 
-  // Exchange the code for a session
-  // Then decide destination: first-time or incomplete profiles go to onboarding
+  // Prepare a redirect response object that will carry the auth cookies,
+  // and update its Location header after we decide the destination.
   let dest = returnTo.startsWith("/") ? returnTo : "/dashboard/jobs"
-  const response = NextResponse.next()
+  const response = NextResponse.redirect(new URL(dest, request.url))
   const supabase = createSupabaseMiddlewareClient(request, response)
   await supabase.auth.exchangeCodeForSession(code)
 
@@ -42,5 +42,6 @@ export async function GET(request: NextRequest) {
   } catch {
   }
 
-  return NextResponse.redirect(new URL(dest, request.url))
+  response.headers.set("Location", new URL(dest, request.url).toString())
+  return response
 }
