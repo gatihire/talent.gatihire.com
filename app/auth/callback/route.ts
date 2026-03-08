@@ -15,8 +15,32 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(redirectTo)
   }
 
-  const response = NextResponse.redirect(new URL(returnTo, request.url))
+  // Exchange the code for a session
+  // Then decide destination: first-time or incomplete profiles go to onboarding
+  let dest = returnTo.startsWith("/") ? returnTo : "/dashboard/jobs"
+  const response = NextResponse.next()
   const supabase = createSupabaseMiddlewareClient(request, response)
   await supabase.auth.exchangeCodeForSession(code)
-  return response
+
+  try {
+    const { data: userRes } = await supabase.auth.getUser()
+    const userId = userRes?.user?.id || ""
+    if (userId) {
+      const { data: c } = await supabase
+        .from("candidates")
+        .select("id,file_url,total_experience,name,status")
+        .eq("auth_user_id", userId)
+        .maybeSingle()
+      const isNew =
+        !c ||
+        !c.file_url ||
+        !c.total_experience ||
+        !c.name ||
+        String(c.status || "").trim().toLowerCase() === "new"
+      if (isNew) dest = "/onboarding"
+    }
+  } catch {
+  }
+
+  return NextResponse.redirect(new URL(dest, request.url))
 }
