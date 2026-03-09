@@ -24,6 +24,6 @@ export default async function InviteRedirectPage(props: { params: Promise<{ toke
       .eq("id", invite.id)
   }
 
-  redirect(`/jobs/${invite.job_id}/apply?invite=${encodeURIComponent(token)}`)
+  redirect(`/jobs/${invite.job_id}${token ? `?invite=${encodeURIComponent(token)}` : ""}`)
 }
 

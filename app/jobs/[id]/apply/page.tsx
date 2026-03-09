@@ -9,5 +9,5 @@ export default async function JobApplyPage(props: {
   const { id } = await props.params
   const sp = props.searchParams || {}
   const invite = typeof sp.invite === "string" ? sp.invite : Array.isArray(sp.invite) ? sp.invite[0] : ""
-  redirect(`/jobs/${id}?apply=1${invite ? `&invite=${encodeURIComponent(invite)}` : ""}`)
+  redirect(`/jobs/${id}${invite ? `?invite=${encodeURIComponent(invite)}` : ""}`)
 }
