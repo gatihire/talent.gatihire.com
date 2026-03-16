@@ -2067,7 +2067,7 @@ export function JobsBoardClient({
                     <div className="space-y-1">
                       <h3 className="text-lg font-semibold text-foreground">No jobs found</h3>
                       <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-                        We couldn't find any jobs matching your current filters. Try adjusting your search criteria.
+                        We couldn&apos;t find any jobs matching your current filters. Try adjusting your search criteria.
                       </p>
                     </div>
                     {activeChips.length > 0 && (
