@@ -467,14 +467,17 @@ async function claimJobs(workerId: string, batchSize: number) {
 async function run() {
   const workerId = process.env.WORKER_ID || `worker_${Math.random().toString(16).slice(2)}`
   const batchSize = Math.min(50, Math.max(1, Number(process.env.WORKER_BATCH_SIZE || 5)))
-  const pollMs = Math.min(10000, Math.max(500, Number(process.env.WORKER_POLL_MS || 2000)))
+  // Polling too aggressively will hammer Supabase even when there is no work.
+  // Use an adaptive backoff loop: fast when jobs exist, slower when idle.
+  const basePollMs = Math.min(60_000, Math.max(2_000, Number(process.env.WORKER_POLL_MS || 15_000)))
+  const maxIdlePollMs = Math.min(180_000, Math.max(basePollMs, Number(process.env.WORKER_MAX_IDLE_POLL_MS || 120_000)))
   const maxAttempts = Math.min(10, Math.max(1, Number(process.env.WORKER_MAX_ATTEMPTS || 3)))
   const envReady = Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL) && Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)
   if (!envReady) {
     console.error("resume worker missing supabase env. Set SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY")
     Sentry.captureMessage("resume worker missing supabase env", { level: "error" })
   }
-  console.log("resume worker started", { workerId, batchSize, pollMs, maxAttempts })
+  console.log("resume worker started", { workerId, batchSize, basePollMs, maxIdlePollMs, maxAttempts })
 
   let shouldStop = false
   let idleCycles = 0
@@ -490,9 +493,13 @@ async function run() {
     if (!list.length) {
       idleCycles += 1
       if (idleCycles % 5 === 0) {
-        console.log("resume worker idle", { workerId, pollMs })
+        console.log("resume worker idle", { workerId, idleCycles })
       }
-      await sleep(pollMs)
+      // Exponential backoff with jitter while idle (caps at maxIdlePollMs)
+      const exp = Math.min(6, idleCycles) // 1..6 => up to 64x
+      const backoff = Math.min(maxIdlePollMs, basePollMs * Math.pow(2, exp - 1))
+      const jitter = Math.floor(Math.random() * Math.min(1000, Math.max(250, Math.floor(backoff * 0.1))))
+      await sleep(backoff + jitter)
       continue
     }
     idleCycles = 0
@@ -537,6 +544,9 @@ async function run() {
         }
       }
     }
+
+    // Brief pause between batches to reduce tight-looping when queue is hot.
+    await sleep(300)
   }
 }
 

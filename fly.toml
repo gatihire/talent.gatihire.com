@@ -14,6 +14,9 @@ primary_region = 'bom'
 [env]
   NODE_ENV = 'production'
   WORKER_ID = 'fly-prod-1'
+  # Safer defaults to avoid hammering Supabase when idle
+  WORKER_POLL_MS = '15000'
+  WORKER_MAX_IDLE_POLL_MS = '120000'
 
 [[vm]]
   memory = '512mb'
