@@ -158,7 +158,7 @@ async function runQuery(params: {
 }) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id,title,created_at,location,city,industry,employment_type,shift_type,salary_type,salary_min,salary_max,department_category,role_category,sub_category,client_id,client_name,company_logo_url,apply_type,external_apply_url,experience_min_years,experience_max_years,skills_must_have,skills_good_to_have")
+    .select("id,title,description,status,updated_at,created_at,location,city,industry,employment_type,shift_type,salary_type,salary_min,salary_max,department_category,role_category,sub_category,client_id,client_name,company_logo_url,apply_type,external_apply_url,experience_min_years,experience_max_years,skills_must_have,skills_good_to_have,urgency_tag,priority_rank", { count: "exact" })
     .eq("status", "open")
 
   if (!params.page && params.cursor) {
@@ -207,30 +207,30 @@ async function runQuery(params: {
     if (orRole) query = query.or(orRole)
   }
 
-  query = query.order("created_at", { ascending: false }).order("id", { ascending: false })
+  query = query.order("priority_rank", { ascending: true }).order("created_at", { ascending: false }).order("id", { ascending: false })
 
   if (params.page) {
     const from = (params.page - 1) * params.pageSize
-    const to = from + params.pageSize
+    const to = from + params.pageSize - 1
     query = query.range(from, to)
   } else {
     query = query.limit(params.limit + 1)
   }
 
-  const { data, error } = await query
+  const { data, error, count } = await query
   if (error) throw new Error("Failed to load jobs")
 
   const rows = ((data || []) as Job[]).filter(Boolean)
   if (params.page) {
     const hasMore = rows.length > params.pageSize
-    const page = hasMore ? rows.slice(0, params.pageSize) : rows
-    return { page, nextCursor: null as string | null, hasMore }
+    const pageItems = rows.slice(0, params.pageSize)
+    return { page: pageItems, nextCursor: null as string | null, hasMore, total: count || 0 }
   }
 
   const hasMore = rows.length > params.limit
-  const page = hasMore ? rows.slice(0, params.limit) : rows
-  const nextCursor = hasMore ? encodeCursor({ created_at: page[page.length - 1]?.created_at || "", id: String(page[page.length - 1].id) }) : null
-  return { page, nextCursor, hasMore }
+  const pageItems = hasMore ? rows.slice(0, params.limit) : rows
+  const nextCursor = hasMore ? encodeCursor({ created_at: pageItems[pageItems.length - 1]?.created_at || "", id: String(pageItems[pageItems.length - 1].id) }) : null
+  return { page: pageItems, nextCursor, hasMore, total: count || 0 }
 }
 
 export async function GET(request: NextRequest) {
@@ -357,7 +357,8 @@ export async function GET(request: NextRequest) {
       nextCursor: page ? null : result.nextCursor,
       page: page || 1,
       pageSize: page ? pageSize : limit,
-      hasMore: Boolean((result as any).hasMore)
+      hasMore: Boolean((result as any).hasMore),
+      total: (result as any).total || 0
     }
 
     await cache.set(cacheKey, payload, 60)

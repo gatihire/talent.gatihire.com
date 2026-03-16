@@ -36,6 +36,7 @@ export type Job = {
   skills_good_to_have?: string[] | null
   apply_type?: "in_platform" | "external" | string | null
   external_apply_url?: string | null
+  priority_rank?: number | null
 }
 
 export type JobSection = {

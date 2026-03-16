@@ -177,6 +177,7 @@ export function JobsBoardClient({
   const [candidateLoading, setCandidateLoading] = useState(false)
 
   const [resultsJobs, setResultsJobs] = useState<Job[]>(jobs)
+  const [resultsTotal, setResultsTotal] = useState(0)
   const [resultsClientsById, setResultsClientsById] = useState<Record<string, ClientLite>>(clientsById)
   const [resultsLoading, setResultsLoading] = useState(false)
   const [resultsError, setResultsError] = useState<string | null>(null)
@@ -550,15 +551,18 @@ export function JobsBoardClient({
       const pageClients = data?.clientsById && typeof data.clientsById === "object" ? (data.clientsById as Record<string, ClientLite>) : {}
 
       const hasMore = Boolean(data?.hasMore)
+      const total = Number(data?.total || 0)
 
       setResultsClientsById(pageClients)
       setResultsJobs(pageJobs)
+      setResultsTotal(total)
       setResultsHasMore(hasMore)
       setResultsUsedProfileFallback(Boolean(data?.usedProfileFallback))
       setResultsLoadedOnce(true)
     } catch (e: any) {
       setResultsError(e?.message || "Failed to load jobs")
       setResultsJobs([])
+      setResultsTotal(0)
       setResultsClientsById({})
       setResultsHasMore(false)
     } finally {
@@ -1882,7 +1886,9 @@ export function JobsBoardClient({
         </Modal>
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm sm:text-base font-semibold text-foreground">Showing {resultsJobs.length} jobs</div>
+          <div className="text-sm sm:text-base font-semibold text-foreground">
+            Showing {resultsJobs.length} of {resultsTotal} jobs
+          </div>
           <div className="flex items-center gap-2">
             <div className="lg:hidden flex items-center gap-2">
               <Button variant="secondary" size="sm" onClick={() => setSortModalOpen(true)} className="gap-2 rounded-xl">
@@ -2052,8 +2058,29 @@ export function JobsBoardClient({
                 ))}
               </div>
             ) : !resultsJobs.length ? (
-              <Card>
-                <CardBody className="py-10 text-center text-muted-foreground">No jobs match your filters.</CardBody>
+              <Card className="rounded-2xl border-border/60 bg-panel/40">
+                <CardBody className="py-16 text-center">
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/60 text-muted-foreground">
+                      <Search className="h-8 w-8" />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="text-lg font-semibold text-foreground">No jobs found</h3>
+                      <p className="text-sm text-muted-foreground max-w-xs mx-auto">
+                        We couldn't find any jobs matching your current filters. Try adjusting your search criteria.
+                      </p>
+                    </div>
+                    {activeChips.length > 0 && (
+                      <Button 
+                        variant="secondary" 
+                        onClick={clearAll}
+                        className="mt-2 rounded-xl"
+                      >
+                        Clear all filters
+                      </Button>
+                    )}
+                  </div>
+                </CardBody>
               </Card>
             ) : (
               <>

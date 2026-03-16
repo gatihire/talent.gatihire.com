@@ -120,7 +120,15 @@ export function JobApplyPageClient({
 
   const aboutRoleBody = useMemo(() => {
     const about = visibleSections.find((s) => s.section_key === "about_role")
-    return String(about?.body_md || job.description || "").trim()
+    if (about) return about.body_md
+
+    let desc = String(job.description || "").trim()
+    const hasGemini = visibleSections.some((s) => s.section_key === "job_description")
+    // If we have Gemini JD, strip the old raw JD from description if present
+    if (hasGemini && desc.includes("---")) {
+      desc = desc.split("---")[0].trim()
+    }
+    return desc
   }, [visibleSections, job.description])
 
   return (
@@ -145,6 +153,7 @@ export function JobApplyPageClient({
           <div className="rounded-3xl border bg-card p-7">
             <div className="flex flex-wrap items-center gap-3">
               {client?.logo_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img alt={clientName} src={client.logo_url} className="h-10 w-10 rounded-2xl border bg-background object-cover" />
               ) : (
                 <div className="h-10 w-10 rounded-2xl border bg-background" />
@@ -216,10 +225,12 @@ export function JobApplyPageClient({
               </section>
             ) : null}
 
-            <section className="rounded-3xl border bg-card p-6">
-              <h2 className="text-sm font-semibold">About the role</h2>
-              <div className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{aboutRoleBody}</div>
-            </section>
+            {aboutRoleBody ? (
+              <section className="rounded-3xl border bg-card p-6">
+                <h2 className="text-sm font-semibold">About the role</h2>
+                <div className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{aboutRoleBody}</div>
+              </section>
+            ) : null}
 
             {visibleSections.length ? (
               <div className="grid gap-6">
