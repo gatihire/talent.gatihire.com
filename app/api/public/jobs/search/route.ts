@@ -222,9 +222,8 @@ async function runQuery(params: {
 
   const rows = ((data || []) as Job[]).filter(Boolean)
   if (params.page) {
-    const hasMore = rows.length > params.pageSize
-    const pageItems = rows.slice(0, params.pageSize)
-    return { page: pageItems, nextCursor: null as string | null, hasMore, total: count || 0 }
+    const hasMore = (params.page * params.pageSize) < (count || 0)
+    return { page: rows, nextCursor: null as string | null, hasMore, total: count || 0 }
   }
 
   const hasMore = rows.length > params.limit

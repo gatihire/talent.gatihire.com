@@ -2329,6 +2329,7 @@ export function JobsBoardClient({
                       const next = new URLSearchParams(sp.toString())
                       next.set("page", String(Math.max(1, appliedPage - 1)))
                       router.push(`${pathname}?${next.toString()}`)
+                      window.scrollTo({ top: 0, behavior: "smooth" })
                     }}
                   >
                     Previous
@@ -2344,6 +2345,7 @@ export function JobsBoardClient({
                       const next = new URLSearchParams(sp.toString())
                       next.set("page", String(appliedPage + 1))
                       router.push(`${pathname}?${next.toString()}`)
+                      window.scrollTo({ top: 0, behavior: "smooth" })
                     }}
                   >
                     Next
