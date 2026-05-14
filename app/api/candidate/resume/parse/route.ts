@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { uploadFileToSupabase } from "@/lib/supabase-storage-utils"
 import { getAuthedUser } from "@/lib/apiServerAuth"
+import { parseResume } from "@/lib/resume-parser"
 
 export const runtime = "nodejs"
 
@@ -140,9 +141,10 @@ export async function POST(request: NextRequest) {
       .insert({
         candidate_id: candidateId,
         file_id: fileRow.id,
-        status: "pending",
+        status: "processing", // changed from pending
         parsing_method: pickParsingMethod(),
-        created_at: nowIso()
+        created_at: nowIso(),
+        started_at: nowIso()
       })
       .select("*")
       .single()
@@ -152,27 +154,123 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Failed to create parsing job: ${pErr?.message || "Unknown error"}`, stage }, { status: 500 })
     }
 
-    stage = "enqueue"
-    const { error: queueErr } = await supabaseAdmin
-      .from("resume_parse_jobs")
-      .insert({
-        candidate_id: candidateId,
-        parsing_job_id: parsingJob.id,
-        file_id: fileRow.id,
-        file_path: path,
-        status: "queued",
-        created_at: nowIso(),
-        updated_at: nowIso()
-      })
-      .select("id")
-      .single()
+    stage = "parse_sync"
+    let finalCandidate = updatedCandidate
+    try {
+      // Create a File object compatible with parseResume
+      const fileBuffer = await file.arrayBuffer()
+      const parseFile = {
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        arrayBuffer: async () => fileBuffer,
+      } as any
 
-    if (queueErr) {
-      console.error("/api/candidate/resume/parse error", { stage, message: queueErr.message })
-      return NextResponse.json({ error: `Failed to enqueue parsing job: ${queueErr.message}`, stage }, { status: 500 })
+      const parsed = await parseResume(parseFile)
+      
+      const candidateUpdate: any = {}
+      
+      function nonEmptyString(v: any) {
+        if (typeof v !== "string") return null
+        const t = v.trim()
+        if (!t || t.toLowerCase() === "not specified" || t.toLowerCase() === "unknown") return null
+        return t
+      }
+      
+      function nonEmptyStringArray(v: any) {
+        if (!Array.isArray(v)) return null
+        const cleaned = v.filter(x => typeof x === "string").map(x => x.trim()).filter(x => x.length > 0 && x.toLowerCase() !== "unknown" && x.toLowerCase() !== "not specified")
+        return cleaned.length ? cleaned : null
+      }
+
+      if (nonEmptyString(parsed.name)) candidateUpdate.name = nonEmptyString(parsed.name)
+      if (nonEmptyString(parsed.phone)) candidateUpdate.phone = nonEmptyString(parsed.phone)
+      if (nonEmptyString(parsed.currentRole)) candidateUpdate.current_role = nonEmptyString(parsed.currentRole)
+      if (nonEmptyString(parsed.currentCompany)) candidateUpdate.current_company = nonEmptyString(parsed.currentCompany)
+      if (nonEmptyString(parsed.location)) candidateUpdate.location = nonEmptyString(parsed.location)
+      if (nonEmptyString(parsed.totalExperience)) candidateUpdate.total_experience = nonEmptyString(parsed.totalExperience)
+      if (nonEmptyString(parsed.highestQualification)) candidateUpdate.highest_qualification = nonEmptyString(parsed.highestQualification)
+      if (nonEmptyString(parsed.degree)) candidateUpdate.degree = nonEmptyString(parsed.degree)
+      if (nonEmptyString(parsed.specialization)) candidateUpdate.specialization = nonEmptyString(parsed.specialization)
+      if (nonEmptyString(parsed.university)) candidateUpdate.university = nonEmptyString(parsed.university)
+      if (nonEmptyString(parsed.educationYear)) candidateUpdate.education_year = nonEmptyString(parsed.educationYear)
+      if (nonEmptyString(parsed.educationPercentage)) candidateUpdate.education_percentage = nonEmptyString(parsed.educationPercentage)
+      if (nonEmptyString(parsed.additionalQualifications)) candidateUpdate.additional_qualifications = nonEmptyString(parsed.additionalQualifications)
+      if (nonEmptyString(parsed.summary)) candidateUpdate.summary = nonEmptyString(parsed.summary)
+      if (nonEmptyString(parsed.resumeText)) candidateUpdate.resume_text = nonEmptyString(parsed.resumeText)
+
+      if (nonEmptyStringArray(parsed.technicalSkills)) candidateUpdate.technical_skills = nonEmptyStringArray(parsed.technicalSkills)
+      if (nonEmptyStringArray(parsed.softSkills)) candidateUpdate.soft_skills = nonEmptyStringArray(parsed.softSkills)
+      if (nonEmptyStringArray(parsed.languagesKnown)) candidateUpdate.languages_known = nonEmptyStringArray(parsed.languagesKnown)
+      if (nonEmptyStringArray(parsed.certifications)) candidateUpdate.certifications = nonEmptyStringArray(parsed.certifications)
+      if (nonEmptyStringArray(parsed.previousCompanies)) candidateUpdate.previous_companies = nonEmptyStringArray(parsed.previousCompanies)
+      if (nonEmptyStringArray(parsed.jobTitles)) candidateUpdate.job_titles = nonEmptyStringArray(parsed.jobTitles)
+      if (nonEmptyStringArray(parsed.workDuration)) candidateUpdate.work_duration = nonEmptyStringArray(parsed.workDuration)
+      if (nonEmptyStringArray(parsed.keyAchievements)) candidateUpdate.key_achievements = nonEmptyStringArray(parsed.keyAchievements)
+      if (nonEmptyStringArray(parsed.projects)) candidateUpdate.projects = nonEmptyStringArray(parsed.projects)
+
+      candidateUpdate.updated_at = nowIso()
+
+      if (Object.keys(candidateUpdate).length > 1) {
+        const { data: updated2 } = await supabaseAdmin
+          .from("candidates")
+          .update(candidateUpdate)
+          .eq("id", candidateId)
+          .select("*")
+          .single()
+        if (updated2) finalCandidate = updated2
+      }
+      
+      const parsedWorkExperience = Array.isArray(parsed.workExperience) ? parsed.workExperience : []
+      if (parsedWorkExperience.length) {
+        await supabaseAdmin.from("work_experience").delete().eq("candidate_id", candidateId)
+        const rows = parsedWorkExperience.map((it: any) => ({
+          candidate_id: candidateId,
+          company: nonEmptyString(it?.company) || "Not specified",
+          role: nonEmptyString(it?.role) || "Not specified",
+          duration: nonEmptyString(it?.duration) || "Not specified",
+          location: nonEmptyString(it?.location),
+          description: nonEmptyString(it?.description),
+          responsibilities: Array.isArray(it?.responsibilities) ? it.responsibilities.map((x:any)=>String(x).trim()).filter(Boolean).join("\n") : nonEmptyString(it?.responsibilities),
+          achievements: Array.isArray(it?.achievements) ? it.achievements.map((x:any)=>String(x).trim()).filter(Boolean).join("\n") : nonEmptyString(it?.achievements),
+          technologies: nonEmptyStringArray(it?.technologies),
+          created_at: nowIso(),
+        })).filter(x => x.company !== "Not specified" || x.role !== "Not specified")
+        if (rows.length) await supabaseAdmin.from("work_experience").insert(rows)
+      }
+
+      const parsedEducation = Array.isArray(parsed.education) ? parsed.education : []
+      if (parsedEducation.length) {
+        await supabaseAdmin.from("education").delete().eq("candidate_id", candidateId)
+        const rows = parsedEducation.map((it: any) => ({
+          candidate_id: candidateId,
+          degree: nonEmptyString(it?.degree) || "Not specified",
+          specialization: nonEmptyString(it?.specialization),
+          institution: nonEmptyString(it?.institution) || nonEmptyString(it?.university) || "Not specified",
+          year: nonEmptyString(it?.year) || nonEmptyString(it?.endYear) || nonEmptyString(it?.educationYear),
+          percentage: nonEmptyString(it?.percentage),
+          description: nonEmptyString(it?.description),
+          created_at: nowIso(),
+        })).filter(x => x.degree !== "Not specified" || x.institution !== "Not specified")
+        if (rows.length) await supabaseAdmin.from("education").insert(rows)
+      }
+
+      await supabaseAdmin
+        .from("parsing_jobs")
+        .update({ status: "completed", completed_at: nowIso() })
+        .eq("id", parsingJob.id)
+        
+      parsingJob.status = "completed"
+
+    } catch (parseErr: any) {
+      console.error("Synchronous parsing failed:", parseErr)
+      await supabaseAdmin
+        .from("parsing_jobs")
+        .update({ status: "failed", error: String(parseErr.message || "") })
+        .eq("id", parsingJob.id)
+      parsingJob.status = "failed"
     }
 
-    return NextResponse.json({ candidate: updatedCandidate, parsingJob })
+    return NextResponse.json({ candidate: finalCandidate, parsingJob })
   } catch (e: any) {
     const message = typeof e?.message === "string" && e.message.trim() ? e.message.trim() : "Internal Server Error"
     console.error("/api/candidate/resume/parse error", { stage, message })

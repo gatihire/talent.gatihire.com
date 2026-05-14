@@ -48,11 +48,12 @@ export async function POST(request: NextRequest) {
 
   const notesParts: string[] = []
   if (typeof body.coverLetter === "string" && body.coverLetter.trim()) notesParts.push(body.coverLetter.trim())
-  if (body.attribution && typeof body.attribution === "object") {
-    try {
-      notesParts.push(`attribution:${JSON.stringify(body.attribution)}`)
-    } catch {}
-  }
+  // Attribution is deliberately omitted from notes to prevent UI clutter
+  // if (body.attribution && typeof body.attribution === "object") {
+  //   try {
+  //     notesParts.push(`attribution:${JSON.stringify(body.attribution)}`)
+  //   } catch {}
+  // }
 
   const baseInsert: any = {
     job_id: body.jobId,

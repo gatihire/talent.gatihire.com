@@ -362,7 +362,7 @@ export function JobsBoardClient({
       : []
     setAppliedSkills(skills)
 
-    const defaultSort = session ? "relevant" : "recent"
+    const defaultSort = "recent"
     const nextSort = sortRaw === "relevant" || sortRaw === "recent" ? sortRaw : defaultSort
     setAppliedSort(nextSort)
 
