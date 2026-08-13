@@ -78,10 +78,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     if (!accessToken) return
     if (candidateProfile === undefined) return
 
-    const hasResume = Boolean((candidateProfile as any)?.file_url)
-    const requiredReady = Boolean((candidateProfile as any)?.name) && Boolean((candidateProfile as any)?.current_role) && Boolean((candidateProfile as any)?.total_experience) && Boolean((candidateProfile as any)?.location)
+    const requiredReady = Boolean((candidateProfile as any)?.name)
 
-    if (!hasResume || !requiredReady) {
+    if (!requiredReady) {
       const current = typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : pathname
       router.replace(`/onboarding?returnTo=${encodeURIComponent(current)}`)
     }
