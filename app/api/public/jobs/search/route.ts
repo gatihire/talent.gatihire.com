@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import type { Job } from "@/lib/types"
 import { searchRL } from "@/lib/rateLimit"
 import { cache } from "@/lib/cache"
+import { getJobsSearchRevision } from "@/lib/jobsCacheRevision"
 import { createHash } from "crypto"
 
 export const runtime = "nodejs"
@@ -207,7 +208,11 @@ async function runQuery(params: {
     if (orRole) query = query.or(orRole)
   }
 
-  query = query.order("priority_rank", { ascending: true }).order("created_at", { ascending: false }).order("id", { ascending: false })
+  if (params.sort === "recent") {
+    query = query.order("created_at", { ascending: false }).order("id", { ascending: false })
+  } else {
+    query = query.order("priority_rank", { ascending: true }).order("created_at", { ascending: false }).order("id", { ascending: false })
+  }
 
   if (params.page) {
     const from = (params.page - 1) * params.pageSize
@@ -241,13 +246,15 @@ export async function GET(request: NextRequest) {
 
   const sp = request.nextUrl.searchParams
 
+  const revision = await getJobsSearchRevision()
+
   const cacheKey = (() => {
     const entries = Array.from(sp.entries())
       .map(([k, v]) => [k, v] as const)
       .sort((a, b) => (a[0] === b[0] ? a[1].localeCompare(b[1]) : a[0].localeCompare(b[0])))
     const raw = JSON.stringify(entries)
     const digest = createHash("sha256").update(raw).digest("hex")
-    return `public:jobs:search:${digest}`
+    return `public:jobs:search:${digest}:${revision}`
   })()
 
   const cached = await cache.get(cacheKey)
