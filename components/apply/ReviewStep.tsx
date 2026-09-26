@@ -21,6 +21,8 @@ export function ReviewStep({
   setNoticePeriod,
   reasonForSwitching,
   setReasonForSwitching,
+  willingToRelocate,
+  setWillingToRelocate,
   busy,
   onBack,
   onSubmit
@@ -37,6 +39,8 @@ export function ReviewStep({
   setNoticePeriod: (v: string) => void
   reasonForSwitching: string
   setReasonForSwitching: (v: string) => void
+  willingToRelocate: string
+  setWillingToRelocate: (v: string) => void
   busy: boolean
   onBack: () => void
   onSubmit: () => void
@@ -44,14 +48,16 @@ export function ReviewStep({
   const needsResume = !candidate?.file_url
   const requiredMissing = !candidate?.current_role || !candidate?.location || !candidate?.total_experience || !candidate?.name
   const missingNotice = !noticePeriod.trim()
+  const missingRelocation = !willingToRelocate
 
   const disabledReason = useMemo(() => {
     if (!candidate) return "Profile not loaded"
     if (needsResume) return "Upload a resume before submitting"
     if (requiredMissing) return "Complete required profile fields"
     if (missingNotice) return "Enter your notice period"
+    if (missingRelocation) return "Select your relocation preference"
     return null
-  }, [candidate, needsResume, requiredMissing, missingNotice])
+  }, [candidate, needsResume, requiredMissing, missingNotice, missingRelocation])
 
   return (
     <Card>
@@ -127,6 +133,22 @@ export function ReviewStep({
                 placeholder="e.g. Better growth, closer to home, higher package…"
                 rows={2}
               />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Willing to relocate *</label>
+              <select
+                value={willingToRelocate}
+                onChange={(e) => setWillingToRelocate(e.target.value)}
+                aria-required="true"
+                className="flex h-12 w-full rounded-xl border border-input bg-background px-3 text-sm"
+              >
+                <option value="">Select…</option>
+                <option value="yes">Yes, willing to relocate</option>
+                <option value="no">No, not willing to relocate</option>
+              </select>
+              {!willingToRelocate ? (
+                <div className="text-xs text-muted-foreground">Required to shortlist.</div>
+              ) : null}
             </div>
           </div>
 

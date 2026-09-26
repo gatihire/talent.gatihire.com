@@ -44,7 +44,9 @@ export async function POST(request: NextRequest) {
   const expectedCtc = typeof body.expectedCtc === "string" ? body.expectedCtc.trim() : ""
   const noticePeriod = typeof body.noticePeriod === "string" ? body.noticePeriod.trim() : ""
   const reasonForSwitching = typeof body.reasonForSwitching === "string" ? body.reasonForSwitching.trim() : ""
-  if (currentCtc || expectedCtc || noticePeriod || reasonForSwitching) {
+  const willingToRelocate =
+    body.willingToRelocate === "yes" || body.willingToRelocate === "no" ? String(body.willingToRelocate) : null
+  if (currentCtc || expectedCtc || noticePeriod || reasonForSwitching || willingToRelocate) {
     await supabaseAdmin
       .from("candidates")
       .update({
@@ -52,6 +54,7 @@ export async function POST(request: NextRequest) {
         ...(expectedCtc ? { expected_ctc: expectedCtc, expected_salary: expectedCtc } : {}),
         ...(noticePeriod ? { notice_period: noticePeriod } : {}),
         ...(reasonForSwitching ? { reason_for_switching: reasonForSwitching } : {}),
+        ...(willingToRelocate !== null ? { willing_to_relocate: willingToRelocate } : {}),
         updated_at: nowIso(),
       })
       .eq("id", candidate.id)

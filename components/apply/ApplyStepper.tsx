@@ -54,6 +54,7 @@ export function ApplyStepper({
   const [expectedCtc, setExpectedCtc] = useState("")
   const [noticePeriod, setNoticePeriod] = useState("")
   const [reasonForSwitching, setReasonForSwitching] = useState("")
+  const [willingToRelocate, setWillingToRelocate] = useState("")
   const [applicationId, setApplicationId] = useState<string | null>(null)
 
   // Initialize the stepper exactly once. Re-running off `session`/`loading`
@@ -245,6 +246,7 @@ export function ApplyStepper({
           expectedCtc,
           noticePeriod,
           reasonForSwitching,
+          willingToRelocate: willingToRelocate || null,
           attribution: attr,
           inviteToken: inviteToken || null
         })
@@ -461,6 +463,8 @@ export function ApplyStepper({
             setNoticePeriod={setNoticePeriod}
             reasonForSwitching={reasonForSwitching}
             setReasonForSwitching={setReasonForSwitching}
+            willingToRelocate={willingToRelocate}
+            setWillingToRelocate={setWillingToRelocate}
             busy={busy}
             onBack={() => setStep("profile")}
             onSubmit={submit}
