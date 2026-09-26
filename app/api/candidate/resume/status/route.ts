@@ -5,6 +5,7 @@ import { getAuthedUser } from "@/lib/apiServerAuth"
 import { RESUME_BUCKET } from "@/lib/constants/storage"
 import { parseResume } from "@/lib/resume-parser"
 import { generateEmbedding } from "@/lib/embedding"
+import { normalizePhone } from "@/lib/phone"
 
 export const runtime = "nodejs"
 
@@ -85,7 +86,14 @@ async function runFallbackParsing(parsingJob: any, candidateId: string) {
   }
 
   const nameV = nonEmptyString((parsed as any).name)
-  const phone = nonEmptyString((parsed as any).phone)
+  {
+    const phoneRaw = nonEmptyString((parsed as any).phone)
+    const phone = phoneRaw ? normalizePhone(phoneRaw) : null
+    if (phone) {
+      candidateUpdate.phone = phone
+      candidateUpdate.phone_e164 = phone
+    }
+  }
   const currentRole = nonEmptyString((parsed as any).currentRole)
   const currentCompany = nonEmptyString((parsed as any).currentCompany)
   const location = nonEmptyString((parsed as any).location)
@@ -110,7 +118,6 @@ async function runFallbackParsing(parsingJob: any, candidateId: string) {
   const keyAchievements = nonEmptyStringArray((parsed as any).keyAchievements)
   const projects = nonEmptyStringArray((parsed as any).projects)
 
-  if (phone) candidateUpdate.phone = phone
   if (nameV) candidateUpdate.name = nameV
   if (currentRole) candidateUpdate.current_role = currentRole
   if (currentCompany) candidateUpdate.current_company = currentCompany

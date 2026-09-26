@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { uploadFileToSupabase } from "@/lib/supabase-storage-utils"
 import { getAuthedUser } from "@/lib/apiServerAuth"
 import { parseResume } from "@/lib/resume-parser"
+import { normalizePhone } from "@/lib/phone"
 
 export const runtime = "nodejs"
 
@@ -183,7 +184,14 @@ export async function POST(request: NextRequest) {
       }
 
       if (nonEmptyString(parsed.name)) candidateUpdate.name = nonEmptyString(parsed.name)
-      if (nonEmptyString(parsed.phone)) candidateUpdate.phone = nonEmptyString(parsed.phone)
+      {
+        const phoneRaw = nonEmptyString(parsed.phone)
+        const phone = phoneRaw ? normalizePhone(phoneRaw) : null
+        if (phone) {
+          candidateUpdate.phone = phone
+          candidateUpdate.phone_e164 = phone
+        }
+      }
       if (nonEmptyString(parsed.currentRole)) candidateUpdate.current_role = nonEmptyString(parsed.currentRole)
       if (nonEmptyString(parsed.currentCompany)) candidateUpdate.current_company = nonEmptyString(parsed.currentCompany)
       if (nonEmptyString(parsed.location)) candidateUpdate.location = nonEmptyString(parsed.location)
