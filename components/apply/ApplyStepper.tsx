@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { Candidate, Job, ParsingJob } from "@/lib/types"
 import { getAttribution } from "@/lib/attribution"
 import { useSupabaseSession } from "@/lib/useSupabaseSession"
@@ -50,10 +50,20 @@ export function ApplyStepper({
   const [candidateLoading, setCandidateLoading] = useState(false)
   const [parsingJob, setParsingJob] = useState<ParsingJob | null>(null)
   const [coverLetter, setCoverLetter] = useState("")
+  const [currentCtc, setCurrentCtc] = useState("")
+  const [expectedCtc, setExpectedCtc] = useState("")
+  const [noticePeriod, setNoticePeriod] = useState("")
+  const [reasonForSwitching, setReasonForSwitching] = useState("")
   const [applicationId, setApplicationId] = useState<string | null>(null)
 
+  // Initialize the stepper exactly once. Re-running off `session`/`loading`
+  // identity changes mid-flow used to reset the step (skipping ahead / back and
+  // making the modal flow look unstructured), e.g. on auth token refresh.
+  const initialized = useRef(false)
   useEffect(() => {
+    if (initialized.current) return
     if (loading) return
+    initialized.current = true
     if (!session) setStep("auth")
     else setStep("resume")
   }, [loading, session])
@@ -107,6 +117,9 @@ export function ApplyStepper({
           if (next.status === "completed" || next.status === "failed") {
             invalidateSessionCache("boardapp:candidateProfile:", { prefix: true })
             await fetchProfile()
+            if (next.status === "completed") {
+              setStep("profile")
+            }
             return
           }
         }
@@ -148,7 +161,13 @@ export function ApplyStepper({
       if (data.parsingJob) setParsingJob(data.parsingJob)
       invalidateSessionCache("boardapp:candidateProfile:", { prefix: true })
       invalidateSessionCache("boardapp:jobsSearch:", { prefix: true })
-      setStep("profile")
+      // Stay on the resume step while parsing runs; the poll effect advances to
+      // Autofill (profile) once the parse job completes. This keeps the flow
+      // structured instead of jumping ahead to a half-filled profile.
+      if (data.parsingJob?.status === "completed") {
+        await fetchProfile()
+        setStep("profile")
+      }
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -219,7 +238,16 @@ export function ApplyStepper({
       const res = await fetch("/api/candidate/applications/submit", {
         method: "POST",
         headers: bearerHeaders(accessToken, { "Content-Type": "application/json" }),
-        body: JSON.stringify({ jobId: job.id, coverLetter, attribution: attr, inviteToken: inviteToken || null })
+        body: JSON.stringify({
+          jobId: job.id,
+          coverLetter,
+          currentCtc,
+          expectedCtc,
+          noticePeriod,
+          reasonForSwitching,
+          attribution: attr,
+          inviteToken: inviteToken || null
+        })
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to submit")
@@ -425,6 +453,14 @@ export function ApplyStepper({
             candidate={candidate}
             coverLetter={coverLetter}
             setCoverLetter={setCoverLetter}
+            currentCtc={currentCtc}
+            setCurrentCtc={setCurrentCtc}
+            expectedCtc={expectedCtc}
+            setExpectedCtc={setExpectedCtc}
+            noticePeriod={noticePeriod}
+            setNoticePeriod={setNoticePeriod}
+            reasonForSwitching={reasonForSwitching}
+            setReasonForSwitching={setReasonForSwitching}
             busy={busy}
             onBack={() => setStep("profile")}
             onSubmit={submit}

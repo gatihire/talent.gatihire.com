@@ -36,6 +36,27 @@ export async function POST(request: NextRequest) {
   if (cErr) return NextResponse.json({ error: "Failed to load candidate" }, { status: 500 })
   if (!candidate?.id) return NextResponse.json({ error: "Candidate profile not found" }, { status: 404 })
 
+  // Persist the apply-form compensation details to the candidate so the admin
+  // screening flow (Flow A / portal) can pre-seed them instead of asking on
+  // WhatsApp. current_ctc/expected_ctc feed the WhatsApp + Bolna pre-seed,
+  // current_salary/expected_salary drive the admin sidebar + client profile UI.
+  const currentCtc = typeof body.currentCtc === "string" ? body.currentCtc.trim() : ""
+  const expectedCtc = typeof body.expectedCtc === "string" ? body.expectedCtc.trim() : ""
+  const noticePeriod = typeof body.noticePeriod === "string" ? body.noticePeriod.trim() : ""
+  const reasonForSwitching = typeof body.reasonForSwitching === "string" ? body.reasonForSwitching.trim() : ""
+  if (currentCtc || expectedCtc || noticePeriod || reasonForSwitching) {
+    await supabaseAdmin
+      .from("candidates")
+      .update({
+        ...(currentCtc ? { current_ctc: currentCtc, current_salary: currentCtc } : {}),
+        ...(expectedCtc ? { expected_ctc: expectedCtc, expected_salary: expectedCtc } : {}),
+        ...(noticePeriod ? { notice_period: noticePeriod } : {}),
+        ...(reasonForSwitching ? { reason_for_switching: reasonForSwitching } : {}),
+        updated_at: nowIso(),
+      })
+      .eq("id", candidate.id)
+  }
+
   if (!candidate.file_url) return NextResponse.json({ error: "Resume required" }, { status: 400 })
   const email = String((candidate as any)?.email || "").trim()
   const phone = String((candidate as any)?.phone || "").trim()
@@ -46,20 +67,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid email" }, { status: 400 })
   }
 
-  const notesParts: string[] = []
-  if (typeof body.coverLetter === "string" && body.coverLetter.trim()) notesParts.push(body.coverLetter.trim())
-  // Attribution is deliberately omitted from notes to prevent UI clutter
-  // if (body.attribution && typeof body.attribution === "object") {
-  //   try {
-  //     notesParts.push(`attribution:${JSON.stringify(body.attribution)}`)
-  //   } catch {}
-  // }
-
   const baseInsert: any = {
     job_id: body.jobId,
     candidate_id: candidate.id,
     status: "applied",
-    notes: notesParts.length ? notesParts.join("\n\n") : null,
+    candidate_notes: typeof body.coverLetter === "string" && body.coverLetter.trim() ? body.coverLetter.trim() : null,
     source: "board-app",
     applied_at: nowIso(),
     updated_at: nowIso()

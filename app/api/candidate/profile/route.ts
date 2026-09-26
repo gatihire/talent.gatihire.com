@@ -190,6 +190,7 @@ export async function PUT(request: NextRequest) {
     const normalized = normalizePhone(patch.phone)
     if (!normalized.ok) return NextResponse.json({ error: normalized.error }, { status: 400 })
     patch.phone = normalized.value
+    patch.phone_e164 = normalized.value
   }
 
   const normalizedArrays: Record<string, string[]> = {}
