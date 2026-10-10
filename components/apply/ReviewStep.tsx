@@ -105,18 +105,33 @@ export function ReviewStep({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="grid gap-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Current CTC</label>
-                <Input value={currentCtc} onChange={(e) => setCurrentCtc(e.target.value)} placeholder="e.g. 8 LPA" className="h-12" />
+                <Input value={currentCtc} onChange={(e) => {
+                  let v = e.target.value.replace(/-/g, '.').replace(/[^0-9.]/g, '')
+                  const parts = v.split('.')
+                  if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('')
+                  setCurrentCtc(v)
+                }} placeholder="e.g. 8 / 8.5" className="h-12" />
               </div>
               <div className="grid gap-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Expected CTC</label>
-                <Input value={expectedCtc} onChange={(e) => setExpectedCtc(e.target.value)} placeholder="e.g. 12 LPA" className="h-12" />
+                <Input value={expectedCtc} onChange={(e) => {
+                  let v = e.target.value.replace(/-/g, '.').replace(/[^0-9.]/g, '')
+                  const parts = v.split('.')
+                  if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('')
+                  setExpectedCtc(v)
+                }} placeholder="e.g. 12 / 12.5" className="h-12" />
               </div>
               <div className="grid gap-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Notice period *</label>
                 <Input
                   value={noticePeriod}
-                  onChange={(e) => setNoticePeriod(e.target.value)}
-                  placeholder="e.g. 30 days / immediate"
+                  onChange={(e) => {
+                    let v = e.target.value
+                    const m = v.match(/(\d+)\s*[-–]\s*(\d+)\s*(days?|months?|weeks?)/i)
+                    if (m) v = `${m[1]} to ${m[2]} ${m[3]}`
+                    setNoticePeriod(v)
+                  }}
+                  placeholder="e.g. 30 days / immediate / 15-20 days"
                   className="h-12"
                   aria-required="true"
                 />

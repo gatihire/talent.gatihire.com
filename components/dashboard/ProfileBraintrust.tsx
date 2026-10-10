@@ -1443,15 +1443,30 @@ export function ProfileBraintrust({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="grid gap-2">
               <div className="text-xs font-medium text-muted-foreground">Notice period</div>
-              <Input value={bioDraft.notice_period} onChange={(e) => setBioDraft({ ...bioDraft, notice_period: e.target.value })} />
+              <Input value={bioDraft.notice_period} onChange={(e) => {
+                let v = e.target.value
+                const m = v.match(/(\d+)\s*[-–]\s*(\d+)\s*(days?|months?|weeks?)/i)
+                if (m) v = `${m[1]} to ${m[2]} ${m[3]}`
+                setBioDraft({ ...bioDraft, notice_period: v })
+              }} />
             </div>
             <div className="grid gap-2">
               <div className="text-xs font-medium text-muted-foreground">Current salary</div>
-              <Input value={bioDraft.current_salary} onChange={(e) => setBioDraft({ ...bioDraft, current_salary: e.target.value })} />
+              <Input value={bioDraft.current_salary} onChange={(e) => {
+                let v = e.target.value.replace(/-/g, '.').replace(/[^0-9.]/g, '')
+                const parts = v.split('.')
+                if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('')
+                setBioDraft({ ...bioDraft, current_salary: v })
+              }} />
             </div>
             <div className="grid gap-2">
               <div className="text-xs font-medium text-muted-foreground">Expected salary</div>
-              <Input value={bioDraft.expected_salary} onChange={(e) => setBioDraft({ ...bioDraft, expected_salary: e.target.value })} />
+              <Input value={bioDraft.expected_salary} onChange={(e) => {
+                let v = e.target.value.replace(/-/g, '.').replace(/[^0-9.]/g, '')
+                const parts = v.split('.')
+                if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('')
+                setBioDraft({ ...bioDraft, expected_salary: v })
+              }} />
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

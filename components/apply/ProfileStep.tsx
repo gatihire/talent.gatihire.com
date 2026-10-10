@@ -124,8 +124,13 @@ export function ProfileStep({
                     <div className="text-xs font-medium text-muted-foreground">Current CTC (Monthly) *</div>
                     <Input
                       value={candidate.current_salary || ""}
-                      onChange={(e) => setCandidate({ ...candidate, current_salary: e.target.value })}
-                      placeholder="e.g. ₹25,000"
+                      onChange={(e) => {
+                        let v = e.target.value.replace(/-/g, '.').replace(/[^0-9.]/g, '')
+                        const parts = v.split('.')
+                        if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('')
+                        setCandidate({ ...candidate, current_salary: v })
+                      }}
+                      placeholder="e.g. 25,000 / 25.0"
                     />
                   </div>
                 )}
@@ -133,8 +138,13 @@ export function ProfileStep({
                   <div className="text-xs font-medium text-muted-foreground">Expected CTC (Monthly) *</div>
                   <Input
                     value={candidate.expected_salary || ""}
-                    onChange={(e) => setCandidate({ ...candidate, expected_salary: e.target.value })}
-                    placeholder="e.g. ₹35,000"
+                    onChange={(e) => {
+                      let v = e.target.value.replace(/-/g, '.').replace(/[^0-9.]/g, '')
+                      const parts = v.split('.')
+                      if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('')
+                      setCandidate({ ...candidate, expected_salary: v })
+                    }}
+                    placeholder="e.g. 35,000 / 35.0"
                   />
                 </div>
               </div>
