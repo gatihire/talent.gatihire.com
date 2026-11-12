@@ -2,9 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai"
 import * as Sentry from "@sentry/nextjs"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { RESUME_BUCKET } from "@/lib/constants/storage"
-import { parseResume } from "@/lib/resume-parser"
-import { generateEmbedding } from "@/lib/embedding"
-import { normalizePhone } from "@/lib/phone"
+import { ingestResume } from "@/lib/resume-ingest"
 
 const sentryDsn =
   process.env.SENTRY_DSN ||
@@ -14,35 +12,6 @@ Sentry.init({ dsn: sentryDsn, tracesSampleRate: 0.1 })
 
 function nowIso() {
   return new Date().toISOString()
-}
-
-function nonEmptyString(v: unknown) {
-  if (typeof v !== "string") return null
-  const t = v.trim()
-  if (!t || t.toLowerCase() === "not specified" || t.toLowerCase() === "unknown") return null
-  return t
-}
-
-function nonEmptyStringArray(v: unknown) {
-  if (!Array.isArray(v)) return null
-  const cleaned = v
-    .filter((x) => typeof x === "string")
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0 && x.toLowerCase() !== "unknown" && x.toLowerCase() !== "not specified")
-  return cleaned.length ? cleaned : null
-}
-
-function buildEmbeddingInput(parsed: any, candidateUpdate: Record<string, unknown>) {
-  const parts = [
-    typeof candidateUpdate.current_role === "string" ? candidateUpdate.current_role : "",
-    typeof candidateUpdate.current_company === "string" ? candidateUpdate.current_company : "",
-    typeof candidateUpdate.location === "string" ? candidateUpdate.location : "",
-    typeof candidateUpdate.summary === "string" ? candidateUpdate.summary : "",
-    typeof parsed?.resumeText === "string" ? parsed.resumeText : "",
-  ]
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-  return parts.join("\n")
 }
 
 async function downloadResumeFile(filePath: string, fallbackUrl: string | null, fileName: string, fileType: string | null) {
@@ -207,81 +176,30 @@ async function processOne(job: any, workerId: string) {
   const { blob, name, type } = await downloadResumeFile(storagePath, fileUrl, fileName, fileType)
   const fileLike = await toFileLike(blob, name, type)
 
-  const parsed = await parseResume(fileLike as any)
+  //
+  // One ingestion path for every resume -- the same module the public apply
+  // route uses. It never throws for a parse failure: it returns whatever it
+  // could extract plus a state, so a resume is never thrown away.
+  //
+  const result = await ingestResume(fileLike as any)
+
+  const parsingMethod = process.env.GEMINI_API_KEY ? "gemini" : process.env.OPENROUTER_API_KEY ? "openrouter" : "basic"
 
   const candidateUpdate: Record<string, unknown> = {
+    ...result.fields,
     file_name: fileName,
     file_url: fileUrl,
     file_size: fileRow.file_size,
     file_type: fileType || "application/octet-stream",
+    parsing_method: parsingMethod,
+    resume_parse_state: result.state,
+    resume_parse_error: result.error ?? null,
     uploaded_at: nowIso(),
     updated_at: nowIso(),
   }
 
-  const nameV = nonEmptyString((parsed as any).name)
-  {
-    const phoneRaw = nonEmptyString((parsed as any).phone)
-    const phone = phoneRaw ? normalizePhone(phoneRaw) : null
-    if (phone) {
-      candidateUpdate.phone = phone
-      candidateUpdate.phone_e164 = phone
-    }
-  }
-  const currentRole = nonEmptyString((parsed as any).currentRole)
-  const currentCompany = nonEmptyString((parsed as any).currentCompany)
-  const location = nonEmptyString((parsed as any).location)
-  const totalExperience = nonEmptyString((parsed as any).totalExperience)
-  const highestQualification = nonEmptyString((parsed as any).highestQualification)
-  const degree = nonEmptyString((parsed as any).degree)
-  const specialization = nonEmptyString((parsed as any).specialization)
-  const university = nonEmptyString((parsed as any).university)
-  const educationYear = nonEmptyString((parsed as any).educationYear)
-  const educationPercentage = nonEmptyString((parsed as any).educationPercentage)
-  const additionalQualifications = nonEmptyString((parsed as any).additionalQualifications)
-  const summary = nonEmptyString((parsed as any).summary)
-  const resumeText = nonEmptyString((parsed as any).resumeText)
-
-  const technicalSkills = nonEmptyStringArray((parsed as any).technicalSkills)
-  const softSkills = nonEmptyStringArray((parsed as any).softSkills)
-  const languagesKnown = nonEmptyStringArray((parsed as any).languagesKnown)
-  const certifications = nonEmptyStringArray((parsed as any).certifications)
-  const previousCompanies = nonEmptyStringArray((parsed as any).previousCompanies)
-  const jobTitles = nonEmptyStringArray((parsed as any).jobTitles)
-  const workDuration = nonEmptyStringArray((parsed as any).workDuration)
-  const keyAchievements = nonEmptyStringArray((parsed as any).keyAchievements)
-  const projects = nonEmptyStringArray((parsed as any).projects)
-
-  if (nameV) candidateUpdate.name = nameV
-  if (currentRole) candidateUpdate.current_role = currentRole
-  if (currentCompany) candidateUpdate.current_company = currentCompany
-  if (location) candidateUpdate.location = location
-  if (totalExperience) candidateUpdate.total_experience = totalExperience
-  if (highestQualification) candidateUpdate.highest_qualification = highestQualification
-  if (degree) candidateUpdate.degree = degree
-  if (specialization) candidateUpdate.specialization = specialization
-  if (university) candidateUpdate.university = university
-  if (educationYear) candidateUpdate.education_year = educationYear
-  if (educationPercentage) candidateUpdate.education_percentage = educationPercentage
-  if (additionalQualifications) candidateUpdate.additional_qualifications = additionalQualifications
-  if (summary) candidateUpdate.summary = summary
-  if (resumeText) candidateUpdate.resume_text = resumeText
-
-  if (technicalSkills) candidateUpdate.technical_skills = technicalSkills
-  if (softSkills) candidateUpdate.soft_skills = softSkills
-  if (languagesKnown) candidateUpdate.languages_known = languagesKnown
-  if (certifications) candidateUpdate.certifications = certifications
-  if (previousCompanies) candidateUpdate.previous_companies = previousCompanies
-  if (jobTitles) candidateUpdate.job_titles = jobTitles
-  if (workDuration) candidateUpdate.work_duration = workDuration
-  if (keyAchievements) candidateUpdate.key_achievements = keyAchievements
-  if (projects) candidateUpdate.projects = projects
-
-  const parsingMethod = process.env.GEMINI_API_KEY ? "gemini" : process.env.OPENROUTER_API_KEY ? "openrouter" : "basic"
-  candidateUpdate.parsing_method = parsingMethod
-
-  let resumeTextValue = ""
-  if (resumeText) resumeTextValue = resumeText
-
+  // Preferences inferred from the resume text (only when the candidate has
+  // not already set them).
   const { data: existingPrefs } = await supabaseAdmin
     .from("candidates")
     .select("preferred_roles,open_job_types,preferred_location,tags")
@@ -289,9 +207,9 @@ async function processOne(job: any, workerId: string) {
     .maybeSingle()
 
   const apiKey = process.env.GEMINI_API_KEY
-  if (resumeTextValue && apiKey) {
+  if (result.resumeText && apiKey) {
     try {
-      const limited = String(resumeTextValue || "").slice(0, 7000)
+      const limited = String(result.resumeText || "").slice(0, 7000)
       const genAI = new GoogleGenerativeAI(apiKey)
       const modelName = process.env.GEMINI_CLASSIFIER_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash"
       const model = genAI.getGenerativeModel({ model: modelName })
@@ -306,32 +224,33 @@ Return ONLY valid JSON with keys:
 Resume text:
 ${limited}`
 
-      const result: any = await model.generateContent(prompt)
-      const content = result.response.text()
+      const genResult: any = await model.generateContent(prompt)
+      const content = genResult.response.text()
       const match = content.match(/\{[\s\S]*\}/)
-      const parsed = match ? JSON.parse(match[0]) : null
+      const parsedPrefs = match ? JSON.parse(match[0]) : null
 
-      const roles = Array.isArray(parsed?.preferred_roles)
-        ? (parsed.preferred_roles as unknown[]).filter((x) => typeof x === "string").map((x) => x.trim()).filter(Boolean).slice(0, 8)
+      const roles = Array.isArray(parsedPrefs?.preferred_roles)
+        ? (parsedPrefs.preferred_roles as unknown[]).filter((x) => typeof x === "string").map((x: string) => x.trim()).filter(Boolean).slice(0, 8)
         : []
-      const jobTypesRaw = Array.isArray(parsed?.open_job_types) ? (parsed.open_job_types as unknown[]) : []
+      const jobTypesRaw = Array.isArray(parsedPrefs?.open_job_types) ? (parsedPrefs.open_job_types as unknown[]) : []
       const jobTypes = Array.from(new Set(jobTypesRaw.map(normalizeJobType).filter(Boolean))) as string[]
-      const preferred_location = typeof parsed?.preferred_location === "string" ? parsed.preferred_location.trim() : ""
+      const preferredLocation = typeof parsedPrefs?.preferred_location === "string" ? parsedPrefs.preferred_location.trim() : ""
 
       const hasRoles = Array.isArray((existingPrefs as any)?.preferred_roles) && (existingPrefs as any).preferred_roles.length
       const hasTypes = Array.isArray((existingPrefs as any)?.open_job_types) && (existingPrefs as any).open_job_types.length
-      const hasLoc = typeof (existingPrefs as any)?.preferred_location === "string" && (existingPrefs as any)?.preferred_location.trim()
+      const hasLoc = typeof (existingPrefs as any)?.preferred_location === "string" && (existingPrefs as any).preferred_location.trim()
 
       if (!hasRoles && roles.length) candidateUpdate.preferred_roles = roles.slice(0, 5)
       if (!hasTypes && jobTypes.length) candidateUpdate.open_job_types = jobTypes
-      if (!hasLoc && preferred_location) candidateUpdate.preferred_location = preferred_location
+      if (!hasLoc && preferredLocation) candidateUpdate.preferred_location = preferredLocation
     } catch {
+      // Preference inference is a nice-to-have. Never fail the parse over it.
     }
   }
 
   const tagsMap = tagsToMap((existingPrefs as any)?.tags)
   try {
-    const inferred = await inferLogisticsBackground(resumeTextValue || "")
+    const inferred = await inferLogisticsBackground(result.resumeText || "")
     if (!tagsMap.logistics_background) {
       tagsMap.logistics_background = inferred.value
     }
@@ -339,16 +258,6 @@ ${limited}`
     if (!tagsMap.logistics_background) tagsMap.logistics_background = "no"
   }
   candidateUpdate.tags = mapToTags(tagsMap)
-
-  try {
-    const input = buildEmbeddingInput(parsed, candidateUpdate)
-    const embedding = await generateEmbedding(input)
-    const expectedDim = Number(process.env.EMBEDDING_DIM || 768)
-    if (Array.isArray(embedding) && embedding.length === expectedDim) {
-      candidateUpdate.embedding = embedding
-    }
-  } catch {
-  }
 
   const { data: updatedCandidate, error: candErr } = await supabaseAdmin
     .from("candidates")
@@ -359,72 +268,44 @@ ${limited}`
 
   if (candErr || !updatedCandidate) throw new Error("Failed to update candidate")
 
-  const parsedWorkExperience = Array.isArray((parsed as any).workExperience) ? ((parsed as any).workExperience as any[]) : []
-  const parsedEducation = Array.isArray((parsed as any).education) ? ((parsed as any).education as any[]) : []
-
-  if (parsedWorkExperience.length) {
+  // Only replace work_experience / education when we actually got rows, so
+  // a partial parse never wipes data that was already there.
+  if (result.workExperience.length) {
     await supabaseAdmin.from("work_experience").delete().eq("candidate_id", candidateId)
-
-    const rows = parsedWorkExperience
-      .map((it) => {
-        const company = nonEmptyString(it?.company)
-        const role = nonEmptyString(it?.role)
-        const duration = nonEmptyString(it?.duration)
-        if (!company && !role) return null
-        const responsibilities = Array.isArray(it?.responsibilities)
-          ? it.responsibilities.map((x: any) => (typeof x === "string" ? x.trim() : "")).filter(Boolean).join("\n")
-          : nonEmptyString(it?.responsibilities)
-        const achievements = Array.isArray(it?.achievements)
-          ? it.achievements.map((x: any) => (typeof x === "string" ? x.trim() : "")).filter(Boolean).join("\n")
-          : nonEmptyString(it?.achievements)
-        const technologies = nonEmptyStringArray(it?.technologies)
-        return {
-          candidate_id: candidateId,
-          company: company || "Not specified",
-          role: role || "Not specified",
-          duration: duration || "Not specified",
-          location: nonEmptyString(it?.location),
-          description: nonEmptyString(it?.description),
-          responsibilities,
-          achievements,
-          technologies,
-          created_at: nowIso(),
-        }
-      })
-      .filter(Boolean) as any[]
-
-    if (rows.length) await supabaseAdmin.from("work_experience").insert(rows)
+    const rows = result.workExperience.map((r) => ({ ...r, candidate_id: candidateId, created_at: nowIso() }))
+    await supabaseAdmin.from("work_experience").insert(rows as any)
   }
 
-  if (parsedEducation.length) {
+  if (result.education.length) {
     await supabaseAdmin.from("education").delete().eq("candidate_id", candidateId)
-
-    const rows = parsedEducation
-      .map((it) => {
-        const degree = nonEmptyString(it?.degree)
-        const institution = nonEmptyString(it?.institution) || nonEmptyString(it?.university)
-        if (!degree && !institution) return null
-        return {
-          candidate_id: candidateId,
-          degree: degree || "Not specified",
-          specialization: nonEmptyString(it?.specialization),
-          institution: institution || "Not specified",
-          year: nonEmptyString(it?.year) || nonEmptyString(it?.endYear) || nonEmptyString(it?.educationYear),
-          percentage: nonEmptyString(it?.percentage),
-          description: nonEmptyString(it?.description),
-          created_at: nowIso(),
-        }
-      })
-      .filter(Boolean) as any[]
-
-    if (rows.length) await supabaseAdmin.from("education").insert(rows)
+    const rows = result.education.map((r) => ({ ...r, candidate_id: candidateId, created_at: nowIso() }))
+    await supabaseAdmin.from("education").insert(rows as any)
   }
 
   await supabaseAdmin
     .from("parsing_jobs")
-    .update({ status: "completed", parsing_method: parsingMethod, completed_at: nowIso() })
+    .update({
+      status: result.state === "needs_review" ? "failed" : "completed",
+      parsing_method: parsingMethod,
+      error: result.error ?? null,
+      completed_at: nowIso(),
+    })
     .eq("id", parsingJobId)
     .eq("candidate_id", candidateId)
+
+  //
+  // A resume we could not read is not a success and not a silent drop. The
+  // candidate is flagged "needs_review" and the job stays queued for another
+  // attempt, so the recruiter can see it needs a human.
+  //
+  if (result.state === "needs_review") {
+    Sentry.captureMessage("resume needs review", {
+      level: "warning",
+      tags: { candidate_id: candidateId, workerId },
+      extra: { error: result.error },
+    })
+    throw new Error(result.error || "Could not extract text from resume")
+  }
 
   await supabaseAdmin
     .from("resume_parse_jobs")

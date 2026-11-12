@@ -107,10 +107,29 @@ function isExtractionErrorMarker(text: string): boolean {
 // Function to validate parsed data quality with confidence scoring
 function isValidParsedData(data: any): boolean {
   // Must have a valid name (not empty, not "unknown", not just whitespace)
-  if (!data.name || 
-      data.name.trim() === "" || 
-      data.name.toLowerCase() === "unknown" ||
-      data.name.toLowerCase() === "not specified" ||
+  //
+  // The extractor returns the literal string "Unknown Name" when it cannot
+  // find a name. That string used to sail through this gate (it is not
+  // literally "unknown"), so a candidate row was written with the name
+  // "Unknown Name" — junk that then showed up in the recruiter's pipeline.
+  // Treat every placeholder as invalid so the parser falls through to the
+  // next strategy instead of persisting it.
+  const nameKey = String(data.name || "").trim().toLowerCase()
+  const placeholderNames = new Set([
+    "unknown",
+    "not specified",
+    "unknown name",
+    "unnamed",
+    "candidate",
+    "full name",
+    "n/a",
+    "na",
+    "none",
+    "-",
+  ])
+  if (!data.name ||
+      data.name.trim() === "" ||
+      placeholderNames.has(nameKey) ||
       data.name.length < 2) {
     console.log("❌ Invalid name:", data.name)
     return false
@@ -282,7 +301,15 @@ Return ONLY the JSON object:`
           model: modelName
         })
         
-        const result = await model.generateContent(prompt)
+        // Retry transient failures (429 / 503 / 504 / timeout) on the SAME
+        // model before giving up on it. Without this, a single rate-limit
+        // burst dropped the whole parse into the regex fallback, which then
+        // failed validation — turning a temporary blip into a permanent
+        // "could not parse resume" for the candidate.
+        const result = await runGeminiCall(
+          () => model.generateContent(prompt),
+          { minSpacingMs: 1200, maxAttempts: 4 }
+        )
         const content = result.response.text()
         
         console.log("Raw Gemini response:", content)
@@ -2004,7 +2031,14 @@ async function parseResumeBasic(file: File) {
   }
 }
 
-async function extractTextFromFile(file: File): Promise<string> {
+/**
+ * Extract raw text from a file without attempting any structured parse.
+ *
+ * Exported so the ingestion layer can use it as a rescue path: when the
+ * LLM parse fails, we still keep the text instead of throwing the resume
+ * away. Returns an error marker string (never throws) on failure.
+ */
+export async function extractTextFromFile(file: File): Promise<string> {
   try {
     console.log(`🔄 Extracting text from ${file.type} file: ${file.name}`)
     console.log(`📁 File details: name=${file.name}, type=${file.type}, size=${file.size} bytes`)
@@ -2597,20 +2631,34 @@ ${limitedText}
 Return ONLY the JSON object:`
 
     console.log("🔄 Sending request to OpenRouter API...")
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openRouterApiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": process.env.APP_PUBLIC_URL || "http://localhost:3000",
-        "X-Title": "GatiHire Resume Parser"
-      },
-      body: JSON.stringify({
-        model: "anthropic/claude-3-opus:beta",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 4000
+    // The old model id ("anthropic/claude-3-opus:beta") was retired by
+    // OpenRouter and returned 404 on every DOCX — which meant the DOCX
+    // branch of the parser was dead. Fall back through current models.
+    const orModel = process.env.OPENROUTER_RESUME_MODEL || "anthropic/claude-3.5-sonnet"
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 120_000)
+    let response: Response
+    try {
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openRouterApiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": process.env.APP_PUBLIC_URL || "http://localhost:3000",
+          "X-Title": "GatiHire Resume Parser"
+        },
+        body: JSON.stringify({
+          model: orModel,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 4000
+        }),
+        signal: controller.signal,
       })
-    })
+    } catch (e: any) {
+      throw new Error(`OpenRouter request failed: ${String(e?.message || e)}`)
+    } finally {
+      clearTimeout(timer)
+    }
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "")

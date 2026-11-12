@@ -95,7 +95,15 @@ export function ResumeStep({
             </div>
           ) : null}
 
-          {parsingJob ? <div className="text-xs text-muted-foreground">Parsing status: {parsingJob.status || "pending"}</div> : null}
+          {parsingJob ? (
+            <div className="text-xs text-muted-foreground">
+              {parsingJob.status === "failed"
+                ? "We could not read this file automatically — it has been saved and our team will review it."
+                : parsingJob.status === "completed"
+                  ? "Resume read successfully."
+                  : "Reading your resume…"}
+            </div>
+          ) : null}
         </div>
       </CardBody>
     </Card>

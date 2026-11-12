@@ -45,6 +45,9 @@ export function ApplyStepper({
   const [step, setStep] = useState<Step>("auth")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A softer message than `error`: the candidate did nothing wrong, we
+  // just could not read every part of their file. They are NOT blocked.
+  const [notice, setNotice] = useState<string | null>(null)
 
   const [candidate, setCandidate] = useState<Candidate | null>(null)
   const [candidateLoading, setCandidateLoading] = useState(false)
@@ -162,6 +165,30 @@ export function ApplyStepper({
       if (data.parsingJob) setParsingJob(data.parsingJob)
       invalidateSessionCache("boardapp:candidateProfile:", { prefix: true })
       invalidateSessionCache("boardapp:jobsSearch:", { prefix: true })
+
+      // The server tells us how far the parse got. "partial" means the text
+      // was read but some fields are missing — the candidate can still
+      // proceed and fill in the gaps. "needs_review" means the file could
+      // not be read at all; the resume is saved and a recruiter will pick
+      // it up, so the candidate is NOT blocked.
+      const parseState = String(data?.parseState || "")
+      if (parseState === "partial") {
+        await fetchProfile()
+        setStep("profile")
+        setNotice(
+          "We read your resume, but could not fill in every field. Please check the details below and complete anything that is missing.",
+        )
+        return
+      }
+      if (parseState === "needs_review") {
+        await fetchProfile()
+        setStep("profile")
+        setNotice(
+          "Your resume has been uploaded and saved. We could not read the text from the file automatically — our team will review it and complete your profile. You can still apply now.",
+        )
+        return
+      }
+
       // Stay on the resume step while parsing runs; the poll effect advances to
       // Autofill (profile) once the parse job completes. This keeps the flow
       // structured instead of jumping ahead to a half-filled profile.
@@ -302,6 +329,11 @@ export function ApplyStepper({
       </div>
 
       {error ? <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm">{error}</div> : null}
+      {notice ? (
+        <div className="rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {notice}
+        </div>
+      ) : null}
 
       {step === "auth" ? (
         <AuthStep

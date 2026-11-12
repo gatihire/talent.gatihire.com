@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
+import * as Sentry from "@sentry/nextjs"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { uploadFileToSupabase } from "@/lib/supabase-storage-utils"
 import { getAuthedUser } from "@/lib/apiServerAuth"
-import { parseResume } from "@/lib/resume-parser"
-import { normalizePhone } from "@/lib/phone"
+import { ingestResume } from "@/lib/resume-ingest"
 
 export const runtime = "nodejs"
 
@@ -46,6 +46,10 @@ async function getOrCreateCandidateId(authUserId: string, email: string) {
       total_experience: "0",
       location: "Unknown",
       status: "new",
+      // The row exists but no resume has been read yet. This state is what
+      // lets us tell "candidate who never uploaded" apart from "candidate
+      // whose upload failed" — the old code left both looking identical.
+      resume_parse_state: "none",
       uploaded_at: nowIso(),
       updated_at: nowIso()
     })
@@ -114,19 +118,18 @@ export async function POST(request: NextRequest) {
     }
 
     stage = "update_candidate"
-    const updates: any = {
-      auth_user_id: user.id,
-      file_name: file.name,
-      file_url: fileUrl,
-      file_size: file.size,
-      file_type: file.type || "application/octet-stream",
-      uploaded_at: nowIso(),
-      updated_at: nowIso()
-    }
-
     const { data: updatedCandidate, error: candErr } = await supabaseAdmin
       .from("candidates")
-      .update(updates)
+      .update({
+        auth_user_id: user.id,
+        file_name: file.name,
+        file_url: fileUrl,
+        file_size: file.size,
+        file_type: file.type || "application/octet-stream",
+        resume_parse_state: "parsing",
+        uploaded_at: nowIso(),
+        updated_at: nowIso()
+      })
       .eq("id", candidateId)
       .select("*")
       .single()
@@ -142,7 +145,7 @@ export async function POST(request: NextRequest) {
       .insert({
         candidate_id: candidateId,
         file_id: fileRow.id,
-        status: "processing", // changed from pending
+        status: "processing",
         parsing_method: pickParsingMethod(),
         created_at: nowIso(),
         started_at: nowIso()
@@ -155,133 +158,138 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Failed to create parsing job: ${pErr?.message || "Unknown error"}`, stage }, { status: 500 })
     }
 
-    stage = "parse_sync"
-    let finalCandidate = updatedCandidate
-    try {
-      // Create a File object compatible with parseResume
-      const fileBuffer = await file.arrayBuffer()
-      const parseFile = {
-        name: file.name,
-        type: file.type || "application/octet-stream",
-        arrayBuffer: async () => fileBuffer,
-      } as any
+    stage = "ingest"
+    //
+    // One ingestion path for every resume. It never throws for a parse
+    // failure — it returns what it managed to extract plus a state, so a
+    // resume is never thrown away because the LLM had a bad minute.
+    const result = await ingestResume(file)
 
-      const parsed = await parseResume(parseFile)
-      
-      const candidateUpdate: any = {}
-      
-      function nonEmptyString(v: any) {
-        if (typeof v !== "string") return null
-        const t = v.trim()
-        if (!t || t.toLowerCase() === "not specified" || t.toLowerCase() === "unknown") return null
-        return t
-      }
-      
-      function nonEmptyStringArray(v: any) {
-        if (!Array.isArray(v)) return null
-        const cleaned = v.filter(x => typeof x === "string").map(x => x.trim()).filter(x => x.length > 0 && x.toLowerCase() !== "unknown" && x.toLowerCase() !== "not specified")
-        return cleaned.length ? cleaned : null
-      }
-
-      if (nonEmptyString(parsed.name)) candidateUpdate.name = nonEmptyString(parsed.name)
-      {
-        const phoneRaw = nonEmptyString(parsed.phone)
-        const phone = phoneRaw ? normalizePhone(phoneRaw) : null
-        if (phone) {
-          candidateUpdate.phone = phone
-          candidateUpdate.phone_e164 = phone
-        }
-      }
-      if (nonEmptyString(parsed.currentRole)) candidateUpdate.current_role = nonEmptyString(parsed.currentRole)
-      if (nonEmptyString(parsed.currentCompany)) candidateUpdate.current_company = nonEmptyString(parsed.currentCompany)
-      if (nonEmptyString(parsed.location)) candidateUpdate.location = nonEmptyString(parsed.location)
-      if (nonEmptyString(parsed.totalExperience)) candidateUpdate.total_experience = nonEmptyString(parsed.totalExperience)
-      if (nonEmptyString(parsed.highestQualification)) candidateUpdate.highest_qualification = nonEmptyString(parsed.highestQualification)
-      if (nonEmptyString(parsed.degree)) candidateUpdate.degree = nonEmptyString(parsed.degree)
-      if (nonEmptyString(parsed.specialization)) candidateUpdate.specialization = nonEmptyString(parsed.specialization)
-      if (nonEmptyString(parsed.university)) candidateUpdate.university = nonEmptyString(parsed.university)
-      if (nonEmptyString(parsed.educationYear)) candidateUpdate.education_year = nonEmptyString(parsed.educationYear)
-      if (nonEmptyString(parsed.educationPercentage)) candidateUpdate.education_percentage = nonEmptyString(parsed.educationPercentage)
-      if (nonEmptyString(parsed.additionalQualifications)) candidateUpdate.additional_qualifications = nonEmptyString(parsed.additionalQualifications)
-      if (nonEmptyString(parsed.summary)) candidateUpdate.summary = nonEmptyString(parsed.summary)
-      if (nonEmptyString(parsed.resumeText)) candidateUpdate.resume_text = nonEmptyString(parsed.resumeText)
-
-      if (nonEmptyStringArray(parsed.technicalSkills)) candidateUpdate.technical_skills = nonEmptyStringArray(parsed.technicalSkills)
-      if (nonEmptyStringArray(parsed.softSkills)) candidateUpdate.soft_skills = nonEmptyStringArray(parsed.softSkills)
-      if (nonEmptyStringArray(parsed.languagesKnown)) candidateUpdate.languages_known = nonEmptyStringArray(parsed.languagesKnown)
-      if (nonEmptyStringArray(parsed.certifications)) candidateUpdate.certifications = nonEmptyStringArray(parsed.certifications)
-      if (nonEmptyStringArray(parsed.previousCompanies)) candidateUpdate.previous_companies = nonEmptyStringArray(parsed.previousCompanies)
-      if (nonEmptyStringArray(parsed.jobTitles)) candidateUpdate.job_titles = nonEmptyStringArray(parsed.jobTitles)
-      if (nonEmptyStringArray(parsed.workDuration)) candidateUpdate.work_duration = nonEmptyStringArray(parsed.workDuration)
-      if (nonEmptyStringArray(parsed.keyAchievements)) candidateUpdate.key_achievements = nonEmptyStringArray(parsed.keyAchievements)
-      if (nonEmptyStringArray(parsed.projects)) candidateUpdate.projects = nonEmptyStringArray(parsed.projects)
-
-      candidateUpdate.updated_at = nowIso()
-
-      if (Object.keys(candidateUpdate).length > 1) {
-        const { data: updated2 } = await supabaseAdmin
-          .from("candidates")
-          .update(candidateUpdate)
-          .eq("id", candidateId)
-          .select("*")
-          .single()
-        if (updated2) finalCandidate = updated2
-      }
-      
-      const parsedWorkExperience = Array.isArray(parsed.workExperience) ? parsed.workExperience : []
-      if (parsedWorkExperience.length) {
-        await supabaseAdmin.from("work_experience").delete().eq("candidate_id", candidateId)
-        const rows = parsedWorkExperience.map((it: any) => ({
-          candidate_id: candidateId,
-          company: nonEmptyString(it?.company) || "Not specified",
-          role: nonEmptyString(it?.role) || "Not specified",
-          duration: nonEmptyString(it?.duration) || "Not specified",
-          location: nonEmptyString(it?.location),
-          description: nonEmptyString(it?.description),
-          responsibilities: Array.isArray(it?.responsibilities) ? it.responsibilities.map((x:any)=>String(x).trim()).filter(Boolean).join("\n") : nonEmptyString(it?.responsibilities),
-          achievements: Array.isArray(it?.achievements) ? it.achievements.map((x:any)=>String(x).trim()).filter(Boolean).join("\n") : nonEmptyString(it?.achievements),
-          technologies: nonEmptyStringArray(it?.technologies),
-          created_at: nowIso(),
-        })).filter(x => x.company !== "Not specified" || x.role !== "Not specified")
-        if (rows.length) await supabaseAdmin.from("work_experience").insert(rows)
-      }
-
-      const parsedEducation = Array.isArray(parsed.education) ? parsed.education : []
-      if (parsedEducation.length) {
-        await supabaseAdmin.from("education").delete().eq("candidate_id", candidateId)
-        const rows = parsedEducation.map((it: any) => ({
-          candidate_id: candidateId,
-          degree: nonEmptyString(it?.degree) || "Not specified",
-          specialization: nonEmptyString(it?.specialization),
-          institution: nonEmptyString(it?.institution) || nonEmptyString(it?.university) || "Not specified",
-          year: nonEmptyString(it?.year) || nonEmptyString(it?.endYear) || nonEmptyString(it?.educationYear),
-          percentage: nonEmptyString(it?.percentage),
-          description: nonEmptyString(it?.description),
-          created_at: nowIso(),
-        })).filter(x => x.degree !== "Not specified" || x.institution !== "Not specified")
-        if (rows.length) await supabaseAdmin.from("education").insert(rows)
-      }
-
-      await supabaseAdmin
-        .from("parsing_jobs")
-        .update({ status: "completed", completed_at: nowIso() })
-        .eq("id", parsingJob.id)
-        
-      parsingJob.status = "completed"
-
-    } catch (parseErr: any) {
-      console.error("Synchronous parsing failed:", parseErr)
-      await supabaseAdmin
-        .from("parsing_jobs")
-        .update({ status: "failed", error: String(parseErr.message || "") })
-        .eq("id", parsingJob.id)
-      parsingJob.status = "failed"
+    const candidateUpdate: Record<string, unknown> = {
+      ...result.fields,
+      file_name: file.name,
+      file_url: fileUrl,
+      file_size: file.size,
+      file_type: file.type || "application/octet-stream",
+      parsing_method: pickParsingMethod(),
+      resume_parse_state: result.state,
+      resume_parse_error: result.error ?? null,
+      uploaded_at: nowIso(),
+      updated_at: nowIso(),
     }
 
-    return NextResponse.json({ candidate: finalCandidate, parsingJob })
+    const { data: updated2, error: updErr } = await supabaseAdmin
+      .from("candidates")
+      .update(candidateUpdate)
+      .eq("id", candidateId)
+      .select("*")
+      .single()
+
+    if (updErr) {
+      console.error("/api/candidate/resume/parse error", { stage: "write_candidate", message: updErr.message })
+      return NextResponse.json({ error: `Failed to save parsed resume: ${updErr.message}`, stage }, { status: 500 })
+    }
+
+    // Work experience / education — only replace when we actually got rows.
+    // The old code deleted the existing rows first and then inserted, so a
+    // partial parse wiped good data that was already there.
+    if (result.workExperience.length) {
+      await supabaseAdmin.from("work_experience").delete().eq("candidate_id", candidateId)
+      const rows = result.workExperience.map((r) => ({ ...r, candidate_id: candidateId, created_at: nowIso() }))
+      await supabaseAdmin.from("work_experience").insert(rows as any)
+    }
+    if (result.education.length) {
+      await supabaseAdmin.from("education").delete().eq("candidate_id", candidateId)
+      const rows = result.education.map((r) => ({ ...r, candidate_id: candidateId, created_at: nowIso() }))
+      await supabaseAdmin.from("education").insert(rows as any)
+    }
+
+    //
+    // A candidate whose resume could not be read is NOT dropped. The file
+    // stays, the state is "needs_review", and we enqueue a background retry
+    // so a human (or a later worker run) can pick it up. This is the
+    // difference between "0% failure" and "the resume vanished".
+    //
+    if (result.state === "needs_review") {
+      Sentry.captureMessage("resume needs review", {
+        level: "warning",
+        tags: { candidate_id: candidateId },
+        extra: { error: result.error },
+      })
+
+      const { data: retryJob } = await supabaseAdmin
+        .from("parsing_jobs")
+        .insert({
+          candidate_id: candidateId,
+          file_id: fileRow.id,
+          status: "pending",
+          parsing_method: pickParsingMethod(),
+          error: result.error || "Could not extract text",
+          created_at: nowIso(),
+        })
+        .select("id")
+        .maybeSingle()
+
+      if (retryJob?.id) {
+        // Enqueue for the background worker.
+        //
+        // The dedupe index is PARTIAL (only active rows), which PostgREST's
+        // ON CONFLICT inference cannot target — so we check explicitly
+        // instead of upserting. This keeps a double-submit from stacking up
+        // queue rows for the same file.
+        const { data: alreadyQueued } = await supabaseAdmin
+          .from("resume_parse_jobs")
+          .select("id")
+          .eq("candidate_id", candidateId)
+          .eq("file_id", fileRow.id)
+          .in("status", ["queued", "processing"])
+          .maybeSingle()
+
+        if (!alreadyQueued) {
+          await supabaseAdmin.from("resume_parse_jobs").insert({
+            candidate_id: candidateId,
+            parsing_job_id: retryJob.id,
+            file_id: fileRow.id,
+            file_path: path,
+            status: "queued",
+            attempts: 0,
+            next_run_at: nowIso(),
+            created_at: nowIso(),
+            updated_at: nowIso(),
+          })
+        }
+      }
+    }
+
+    await supabaseAdmin
+      .from("parsing_jobs")
+      .update({
+        status: result.state === "needs_review" ? "failed" : "completed",
+        error: result.error ?? null,
+        completed_at: nowIso(),
+      })
+      .eq("id", parsingJob.id)
+
+    // The status endpoint polls this job, so keep it consistent.
+    const finalJob = {
+      ...parsingJob,
+      status: result.state === "needs_review" ? "failed" : "completed",
+      error: result.error ?? null,
+      completed_at: nowIso(),
+    }
+
+    return NextResponse.json({
+      candidate: updated2,
+      parsingJob: finalJob,
+      // The client uses this to tell the candidate what is really going on
+      // instead of showing "Parsing status: failed" and going quiet.
+      parseState: result.state,
+      parseError: result.error ?? null,
+    })
   } catch (e: any) {
     const message = typeof e?.message === "string" && e.message.trim() ? e.message.trim() : "Internal Server Error"
     console.error("/api/candidate/resume/parse error", { stage, message })
+    Sentry.captureException(e, { tags: { stage } })
     return NextResponse.json({ error: message, stage }, { status: 500 })
   }
 }

@@ -55,18 +55,46 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     return vec
   }
 
-  try {
-    return await doRequest(makeBody(true))
-  } catch (e: any) {
-    const status = Number((e as any)?.status || 0)
-    const msg = String((e as any)?.message || e)
-    if (status === 400 && /output_dimensionality|dimension|invalid value|unsupported/i.test(msg)) {
-      return await doRequest(makeBody(false))
-    }
-    if (status === 429 || status === 503) {
-      await sleep(600)
+  // Retry transient failures with backoff. The embedding API rate-limits
+  // hard, and the old code gave up after a single 600ms sleep — so a
+  // candidate silently lost their vector and became invisible to search.
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
       return await doRequest(makeBody(true))
+    } catch (e: any) {
+      const status = Number((e as any)?.status || 0)
+      const msg = String((e as any)?.message || e)
+      lastErr = e
+
+      // A 400 about the output dimension means the model does not support
+      // the requested size — retry once without it, that is not transient.
+      if (status === 400 && /output_dimensionality|dimension|invalid value|unsupported/i.test(msg)) {
+        try {
+          return await doRequest(makeBody(false))
+        } catch (e2: any) {
+          lastErr = e2
+          console.error("[embedding] dimension-less retry failed:", e2?.message || e2)
+        }
+        break
+      }
+
+      if (status === 429 || status === 503 || status === 504) {
+        const backoff = 800 * Math.pow(2, attempt) + Math.floor(Math.random() * 300)
+        console.warn(`[embedding] transient ${status}; retrying in ${backoff}ms (attempt ${attempt + 1})`)
+        await sleep(backoff)
+        continue
+      }
+
+      // Anything else is permanent — stop burning retries.
+      console.error("[embedding] embedding request failed:", status || 0, msg)
+      break
     }
-    return []
   }
+
+  // Never throw. Callers treat an empty vector as "no embedding" and can
+  // retry later via the backfill route — but they must not lose the rest
+  // of the candidate update because of it.
+  console.error("[embedding] giving up:", lastErr instanceof Error ? lastErr.message : lastErr)
+  return []
 }
