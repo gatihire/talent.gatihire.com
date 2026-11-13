@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { GoogleGenerativeAI } from "@google/generative-ai"
+import { RESUME_PARSE_MODELS } from "@/lib/resume-parser"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { getAuthedUser } from "@/lib/apiServerAuth"
 
@@ -24,7 +25,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey)
-    const modelName = process.env.GEMINI_CLASSIFIER_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash"
+    const modelName = process.env.GEMINI_CLASSIFIER_MODEL || process.env.GEMINI_MODEL || RESUME_PARSE_MODELS[0]
     const model = genAI.getGenerativeModel({ model: modelName })
 
     const profileText = [

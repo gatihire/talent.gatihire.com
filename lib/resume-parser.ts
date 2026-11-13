@@ -5,6 +5,40 @@ import mammoth from "mammoth"
 import JSZip from "jszip"
 import { ComprehensiveCandidateData } from "./types"
 
+/**
+ * The Gemini models used to parse resumes, most preferred first.
+ *
+ * Every one of these must be a model that still EXISTS. Google retires
+ * models without warning, and a retired model returns 404 — which, before
+ * this list existed, took the entire parse path down: the OCR step failed,
+ * the structured parse failed, the fallback produced garbage, and the
+ * candidate's resume was dropped with "Failed to extract valid candidate
+ * information from resume". Nobody could tell the difference between "this
+ * PDF is a scan" and "our model was switched off".
+ *
+ * Verified working: gemini-3.1-flash-lite-preview, gemini-2.5-flash,
+ * gemini-3.8-flash, gemini-2.5-flash-lite.
+ */
+export const RESUME_PARSE_MODELS = [
+  "gemini-3.1-flash-lite-preview",
+  "gemini-2.5-flash",
+  "gemini-3.8-flash",
+  "gemini-2.5-flash-lite",
+]
+
+/**
+ * The models to try, in order.
+ *
+ * `GEMINI_MODEL` can override the first choice, but the working fallbacks
+ * are always appended — a single bad override must not take the whole
+ * parse path down again.
+ */
+export function resumeParseModels(): string[] {
+  const preferred = String(process.env.GEMINI_MODEL || "").trim()
+  const list = preferred ? [preferred, ...RESUME_PARSE_MODELS] : [...RESUME_PARSE_MODELS]
+  return Array.from(new Set(list))
+}
+
 const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null
 const openRouterApiKey = process.env.OPENROUTER_API_KEY || ""
 
@@ -289,8 +323,14 @@ ${limitedText}
 
 Return ONLY the JSON object:`
 
-    // Try different Gemini models with fallback (prioritize 2.0-flash which is available)
-    const models = [process.env.GEMINI_MODEL || "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]
+    // Models to try, in order.
+    //
+    // Every entry here has to be a model that still EXISTS. "gemini-2.0-flash"
+    // was retired and now returns 404, which silently killed the whole
+    // structured-parse path for every DOCX and for every PDF whose text
+    // layer needed OCR. A retired model fails the same way a rate limit
+    // does — the parse gives up and the candidate loses their resume.
+    const models = resumeParseModels()
     let lastError = null
 
     for (const modelName of models) {
@@ -2254,7 +2294,8 @@ async function extractPDFTextWithGemini(arrayBuffer: ArrayBuffer): Promise<strin
   if (!genAI) {
     throw new Error("Gemini API not configured")
   }
-  const modelName = process.env.GEMINI_OCR_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash"
+  // Same rule as the structured parse: only models that still exist.
+  const modelName = process.env.GEMINI_OCR_MODEL || process.env.GEMINI_MODEL || RESUME_PARSE_MODELS[0]
   const model = genAI.getGenerativeModel({ model: modelName })
   const pdfBase64 = Buffer.from(arrayBuffer).toString("base64")
   const prompt =

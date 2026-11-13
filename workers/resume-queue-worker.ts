@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { RESUME_BUCKET } from "@/lib/constants/storage"
 import { ingestResume } from "@/lib/resume-ingest"
+import { RESUME_PARSE_MODELS } from "@/lib/resume-parser"
 
 const sentryDsn =
   process.env.SENTRY_DSN ||
@@ -115,7 +116,7 @@ async function inferLogisticsBackground(text: string) {
   if (!apiKey) return { value: "no", source: "default" }
 
   const genAI = new GoogleGenerativeAI(apiKey)
-  const modelName = process.env.GEMINI_CLASSIFIER_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash"
+  const modelName = process.env.GEMINI_CLASSIFIER_MODEL || process.env.GEMINI_MODEL || RESUME_PARSE_MODELS[0]
   const model = genAI.getGenerativeModel({ model: modelName })
 
   const limited = String(text || "").slice(0, 6000)
@@ -211,7 +212,7 @@ async function processOne(job: any, workerId: string) {
     try {
       const limited = String(result.resumeText || "").slice(0, 7000)
       const genAI = new GoogleGenerativeAI(apiKey)
-      const modelName = process.env.GEMINI_CLASSIFIER_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash"
+      const modelName = process.env.GEMINI_CLASSIFIER_MODEL || process.env.GEMINI_MODEL || RESUME_PARSE_MODELS[0]
       const model = genAI.getGenerativeModel({ model: modelName })
       const prompt = `You are helping a logistics/transportation job platform.
 
@@ -317,6 +318,48 @@ async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms))
 }
 
+/**
+ * Release jobs whose worker died holding them.
+ *
+ * A worker claims a job by flipping it to 'processing'. If the worker is
+ * killed mid-parse — a deploy, an OOM, a laptop closing — the job stays
+ * 'processing' forever. The claim RPC only ever picks 'queued' rows, so
+ * the queue looks empty while jobs sit locked, and those candidates are
+ * never parsed again. That is exactly how a resume ends up stuck: the
+ * file is uploaded, the job is claimed, and then nothing happens to it
+ * ever again.
+ *
+ * Anything locked for longer than STALE_LOCK_MINUTES goes back to 'queued'
+ * so another worker can pick it up.
+ */
+const STALE_LOCK_MINUTES = 15
+
+async function releaseStaleLocks(workerId: string) {
+  const cutoff = new Date(Date.now() - STALE_LOCK_MINUTES * 60_000).toISOString()
+  const { data, error } = await supabaseAdmin
+    .from("resume_parse_jobs")
+    .update({
+      status: "queued",
+      locked_by: null,
+      locked_at: null,
+      next_run_at: nowIso(),
+      updated_at: nowIso(),
+    })
+    .eq("status", "processing")
+    .lt("locked_at", cutoff)
+    .select("id")
+
+  if (error) {
+    console.error("releaseStaleLocks failed", error.message)
+    return 0
+  }
+  const n = data?.length || 0
+  if (n > 0) {
+    console.log(`resume worker released ${n} stale locked job(s) (${workerId})`)
+  }
+  return n
+}
+
 async function claimJobs(workerId: string, batchSize: number) {
   const { data, error } = await supabaseAdmin.rpc("claim_resume_parse_jobs", {
     worker_id: workerId,
@@ -377,6 +420,10 @@ async function run() {
   })
 
   while (!shouldStop) {
+    // Reap jobs whose worker died holding them. This runs on every cycle,
+    // so a killed worker never leaves a resume stuck.
+    await releaseStaleLocks(workerId)
+
     const list = await claimJobs(workerId, batchSize)
     if (!list.length) {
       idleCycles += 1
