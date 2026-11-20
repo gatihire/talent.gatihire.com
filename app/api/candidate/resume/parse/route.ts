@@ -3,9 +3,11 @@ import * as Sentry from "@sentry/nextjs"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { uploadFileToSupabase } from "@/lib/supabase-storage-utils"
 import { getAuthedUser } from "@/lib/apiServerAuth"
-import { ingestResume } from "@/lib/resume-ingest"
 
 export const runtime = "nodejs"
+// Uploading + queueing is fast. Parsing happens in the worker, never in this
+// request, so this is only a ceiling for a slow 12MB upload.
+export const maxDuration = 60
 
 function nowIso() {
   return new Date().toISOString()
@@ -126,7 +128,8 @@ export async function POST(request: NextRequest) {
         file_url: fileUrl,
         file_size: file.size,
         file_type: file.type || "application/octet-stream",
-        resume_parse_state: "parsing",
+        resume_parse_state: "queued",
+        resume_parse_error: null,
         uploaded_at: nowIso(),
         updated_at: nowIso()
       })
@@ -145,10 +148,9 @@ export async function POST(request: NextRequest) {
       .insert({
         candidate_id: candidateId,
         file_id: fileRow.id,
-        status: "processing",
+        status: "pending",
         parsing_method: pickParsingMethod(),
-        created_at: nowIso(),
-        started_at: nowIso()
+        created_at: nowIso()
       })
       .select("*")
       .single()
@@ -158,134 +160,44 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Failed to create parsing job: ${pErr?.message || "Unknown error"}`, stage }, { status: 500 })
     }
 
-    stage = "ingest"
+    stage = "enqueue"
     //
-    // One ingestion path for every resume. It never throws for a parse
-    // failure — it returns what it managed to extract plus a state, so a
-    // resume is never thrown away because the LLM had a bad minute.
-    const result = await ingestResume(file)
-
-    const candidateUpdate: Record<string, unknown> = {
-      ...result.fields,
-      file_name: file.name,
-      file_url: fileUrl,
-      file_size: file.size,
-      file_type: file.type || "application/octet-stream",
-      parsing_method: pickParsingMethod(),
-      resume_parse_state: result.state,
-      resume_parse_error: result.error ?? null,
-      uploaded_at: nowIso(),
+    // Hand the parse to the background worker and return immediately.
+    //
+    // Parsing a resume means OCR + one or more LLM calls and routinely takes
+    // 10–60 seconds. Doing it inline is what produced the "Failed to fetch"
+    // candidates were reporting: the serverless function hit its wall-clock
+    // limit and the connection was cut before a response was written, so the
+    // browser surfaced a bare network error even though the file had already
+    // been uploaded. The file is safely in storage at this point; the worker
+    // (or the status endpoint's fallback parser) finishes the job.
+    const { error: queueErr } = await supabaseAdmin.from("resume_parse_jobs").insert({
+      candidate_id: candidateId,
+      parsing_job_id: parsingJob.id,
+      file_id: fileRow.id,
+      file_path: path,
+      status: "queued",
+      attempts: 0,
+      next_run_at: nowIso(),
+      created_at: nowIso(),
       updated_at: nowIso(),
-    }
+    })
 
-    const { data: updated2, error: updErr } = await supabaseAdmin
-      .from("candidates")
-      .update(candidateUpdate)
-      .eq("id", candidateId)
-      .select("*")
-      .single()
-
-    if (updErr) {
-      console.error("/api/candidate/resume/parse error", { stage: "write_candidate", message: updErr.message })
-      return NextResponse.json({ error: `Failed to save parsed resume: ${updErr.message}`, stage }, { status: 500 })
-    }
-
-    // Work experience / education — only replace when we actually got rows.
-    // The old code deleted the existing rows first and then inserted, so a
-    // partial parse wiped good data that was already there.
-    if (result.workExperience.length) {
-      await supabaseAdmin.from("work_experience").delete().eq("candidate_id", candidateId)
-      const rows = result.workExperience.map((r) => ({ ...r, candidate_id: candidateId, created_at: nowIso() }))
-      await supabaseAdmin.from("work_experience").insert(rows as any)
-    }
-    if (result.education.length) {
-      await supabaseAdmin.from("education").delete().eq("candidate_id", candidateId)
-      const rows = result.education.map((r) => ({ ...r, candidate_id: candidateId, created_at: nowIso() }))
-      await supabaseAdmin.from("education").insert(rows as any)
-    }
-
-    //
-    // A candidate whose resume could not be read is NOT dropped. The file
-    // stays, the state is "needs_review", and we enqueue a background retry
-    // so a human (or a later worker run) can pick it up. This is the
-    // difference between "0% failure" and "the resume vanished".
-    //
-    if (result.state === "needs_review") {
-      Sentry.captureMessage("resume needs review", {
-        level: "warning",
-        tags: { candidate_id: candidateId },
-        extra: { error: result.error },
-      })
-
-      const { data: retryJob } = await supabaseAdmin
-        .from("parsing_jobs")
-        .insert({
-          candidate_id: candidateId,
-          file_id: fileRow.id,
-          status: "pending",
-          parsing_method: pickParsingMethod(),
-          error: result.error || "Could not extract text",
-          created_at: nowIso(),
-        })
-        .select("id")
-        .maybeSingle()
-
-      if (retryJob?.id) {
-        // Enqueue for the background worker.
-        //
-        // The dedupe index is PARTIAL (only active rows), which PostgREST's
-        // ON CONFLICT inference cannot target — so we check explicitly
-        // instead of upserting. This keeps a double-submit from stacking up
-        // queue rows for the same file.
-        const { data: alreadyQueued } = await supabaseAdmin
-          .from("resume_parse_jobs")
-          .select("id")
-          .eq("candidate_id", candidateId)
-          .eq("file_id", fileRow.id)
-          .in("status", ["queued", "processing"])
-          .maybeSingle()
-
-        if (!alreadyQueued) {
-          await supabaseAdmin.from("resume_parse_jobs").insert({
-            candidate_id: candidateId,
-            parsing_job_id: retryJob.id,
-            file_id: fileRow.id,
-            file_path: path,
-            status: "queued",
-            attempts: 0,
-            next_run_at: nowIso(),
-            created_at: nowIso(),
-            updated_at: nowIso(),
-          })
-        }
-      }
-    }
-
-    await supabaseAdmin
-      .from("parsing_jobs")
-      .update({
-        status: result.state === "needs_review" ? "failed" : "completed",
-        error: result.error ?? null,
-        completed_at: nowIso(),
-      })
-      .eq("id", parsingJob.id)
-
-    // The status endpoint polls this job, so keep it consistent.
-    const finalJob = {
-      ...parsingJob,
-      status: result.state === "needs_review" ? "failed" : "completed",
-      error: result.error ?? null,
-      completed_at: nowIso(),
+    if (queueErr) {
+      // Do not fail the upload: the resume is stored and the status endpoint's
+      // fallback parser claims any parsing_job that has no active queue row.
+      console.error("/api/candidate/resume/parse enqueue failed", { message: queueErr.message })
+      Sentry.captureException(queueErr, { tags: { stage: "enqueue", candidate_id: candidateId } })
     }
 
     return NextResponse.json({
-      candidate: updated2,
-      parsingJob: finalJob,
-      // The client uses this to tell the candidate what is really going on
-      // instead of showing "Parsing status: failed" and going quiet.
-      parseState: result.state,
-      parseError: result.error ?? null,
+      candidate: updatedCandidate,
+      parsingJob,
+      // The client polls /api/candidate/resume/status until this job finishes.
+      parseState: "queued",
+      parseError: null,
     })
+
   } catch (e: any) {
     const message = typeof e?.message === "string" && e.message.trim() ? e.message.trim() : "Internal Server Error"
     console.error("/api/candidate/resume/parse error", { stage, message })

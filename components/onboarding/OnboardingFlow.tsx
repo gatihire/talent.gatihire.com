@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { useSearchParams } from "next/navigation"
 import type { Candidate, ParsingJob } from "@/lib/types"
 import { useSupabaseSession } from "@/lib/useSupabaseSession"
-import { bearerHeaders } from "@/lib/http"
+import { bearerHeaders, describeFetchError } from "@/lib/http"
 import { sanitizeReturnTo } from "@/lib/returnTo"
 import { ResumeStep } from "@/components/apply/ResumeStep"
 import { ProfileStep } from "@/components/apply/ProfileStep"
@@ -242,7 +242,7 @@ export function OnboardingFlow() {
       if (data.parsingJob) setParsingJob(data.parsingJob)
       setStep("profile")
     } catch (e: any) {
-      setError(e.message)
+      setError(describeFetchError(e, "We could not upload your resume. Please try again."))
     } finally {
       setBusy(false)
     }
@@ -259,7 +259,7 @@ export function OnboardingFlow() {
       if (data?.parsingJob) setParsingJob(data.parsingJob)
       setStep("profile")
     } catch (e: any) {
-      setError(e.message)
+      setError(describeFetchError(e, "We could not start reading your resume. Please try again."))
     } finally {
       setBusy(false)
     }

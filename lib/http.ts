@@ -2,6 +2,28 @@ export function bearerHeaders(accessToken: string | undefined, extra?: Record<st
   return { ...(extra || {}), ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) }
 }
 
+/**
+ * Turn a fetch rejection into something a candidate can act on.
+ *
+ * When the request never gets a response — the function was killed, the
+ * connection dropped, a proxy timed out — the browser throws a bare
+ * `TypeError: Failed to fetch`. Showing that string is what made the resume
+ * upload look broken with no explanation. The upload endpoint now returns
+ * immediately, but the message still matters for genuinely dropped
+ * connections.
+ */
+export function describeFetchError(error: unknown, fallback = "Something went wrong. Please try again."): string {
+  const message = typeof (error as any)?.message === "string" ? String((error as any).message).trim() : ""
+  if (!message) return fallback
+  if (/failed to fetch|networkerror|load failed|network request failed|fetch failed/i.test(message)) {
+    return "We could not reach the server — the upload was interrupted. Please check your connection and try again."
+  }
+  if (/aborted|timed out|timeout/i.test(message)) {
+    return "That took too long and the connection was closed. Please try again."
+  }
+  return message
+}
+
 type SessionCacheEntry<T> = {
   value: T
   fetchedAt: number

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { Candidate, ParsingJob } from "@/lib/types"
-import { bearerHeaders, invalidateSessionCache } from "@/lib/http"
+import { bearerHeaders, describeFetchError, invalidateSessionCache } from "@/lib/http"
 import { useRouter } from "next/navigation"
 import { mapToTags, tagsToMap } from "@/components/apply/tagUtils"
 import { Badge } from "@/components/ui/Badge"
@@ -150,7 +150,7 @@ export function ProfileEditor({
       invalidateSessionCache("boardapp:jobsSearch:", { prefix: true })
       router.push(`/onboarding?returnTo=${encodeURIComponent("/dashboard")}`)
     } catch (e: any) {
-      setError(e.message)
+      setError(describeFetchError(e, "We could not upload your resume. Please try again."))
     } finally {
       setBusy(false)
     }

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import Image from "next/image"
 import { useRouter, useSearchParams } from "next/navigation"
 import type { Candidate } from "@/lib/types"
-import { bearerHeaders } from "@/lib/http"
+import { bearerHeaders, describeFetchError } from "@/lib/http"
 import { tagsToMap, mapToTags } from "@/components/apply/tagUtils"
 import { Modal } from "@/components/ui/Modal"
 import { Button } from "@/components/ui/Button"
@@ -641,10 +641,12 @@ export function ProfileBraintrust({
       if (!res.ok) {
         const msg = String(data?.error || "Failed to upload")
         setResumeUploadError(msg)
-        throw new Error(msg)
+        return
       }
       if (data?.candidate) onCandidateUpdated(data.candidate)
       router.push(`/onboarding?returnTo=${encodeURIComponent("/dashboard/profile?tab=resume")}`)
+    } catch (e: any) {
+      setResumeUploadError(describeFetchError(e, "We could not upload your resume. Please try again."))
     } finally {
       setResumeUploading(false)
     }

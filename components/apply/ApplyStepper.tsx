@@ -12,7 +12,7 @@ import { ProfileStep } from "@/components/apply/ProfileStep"
 import { ReviewStep } from "@/components/apply/ReviewStep"
 import { ApplySuccess } from "@/components/apply/ApplySuccess"
 import { ProfileSetupSuccess } from "@/components/apply/ProfileSetupSuccess"
-import { bearerHeaders, cachedFetchJson, invalidateSessionCache } from "@/lib/http"
+import { bearerHeaders, cachedFetchJson, describeFetchError, invalidateSessionCache } from "@/lib/http"
 
 type Step = "auth" | "resume" | "profile" | "review" | "done"
 
@@ -123,6 +123,14 @@ export function ApplyStepper({
             await fetchProfile()
             if (next.status === "completed") {
               setStep("profile")
+            } else {
+              // The file is saved and flagged for review. Do not trap the
+              // candidate on the resume step just because the LLM could not
+              // read it — they can finish their profile and apply now.
+              setNotice(
+                "Your resume is saved, but we could not read it automatically. Our team will review it — you can finish your profile and apply now.",
+              )
+              setStep("profile")
             }
             return
           }
@@ -197,7 +205,7 @@ export function ApplyStepper({
         setStep("profile")
       }
     } catch (e: any) {
-      setError(e.message)
+      setError(describeFetchError(e, "We could not upload your resume. Please try again."))
     } finally {
       setBusy(false)
     }
@@ -217,7 +225,7 @@ export function ApplyStepper({
       if (data?.parsingJob) setParsingJob(data.parsingJob)
       setStep("profile")
     } catch (e: any) {
-      setError(e.message)
+      setError(describeFetchError(e, "We could not start reading your resume. Please try again."))
     } finally {
       setBusy(false)
     }
@@ -293,7 +301,7 @@ export function ApplyStepper({
       }
       setStep("done")
     } catch (e: any) {
-      setError(e.message)
+      setError(describeFetchError(e, "We could not submit your application. Please try again."))
     } finally {
       setBusy(false)
     }

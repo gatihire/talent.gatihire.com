@@ -8,6 +8,9 @@ import { generateEmbedding } from "@/lib/embedding"
 import { normalizePhone } from "@/lib/phone"
 
 export const runtime = "nodejs"
+// The fallback parser in GET can run a full OCR + LLM parse when the worker
+// is down, so give it room. Normal polling returns in milliseconds.
+export const maxDuration = 60
 
 function nowIso() {
   return new Date().toISOString()
