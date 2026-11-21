@@ -180,6 +180,8 @@ export function ApplyStepper({
       // not be read at all; the resume is saved and a recruiter will pick
       // it up, so the candidate is NOT blocked.
       const parseState = String(data?.parseState || "")
+      const jobStatus = String(data?.parsingJob?.status || "")
+
       if (parseState === "partial") {
         await fetchProfile()
         setStep("profile")
@@ -197,13 +199,26 @@ export function ApplyStepper({
         return
       }
 
-      // Stay on the resume step while parsing runs; the poll effect advances to
-      // Autofill (profile) once the parse job completes. This keeps the flow
-      // structured instead of jumping ahead to a half-filled profile.
-      if (data.parsingJob?.status === "completed") {
+      // The parse runs inside the upload request, so by the time the response
+      // arrives the job is already terminal. Advance on that — waiting for a
+      // poll that never came left candidates stuck on the resume step and
+      // made a successful upload look like a failure.
+      if (parseState === "parsed" || jobStatus === "completed") {
         await fetchProfile()
         setStep("profile")
+        return
       }
+      if (jobStatus === "failed") {
+        await fetchProfile()
+        setStep("profile")
+        setNotice(
+          "Your resume is saved, but we could not read it automatically. Our team will review it — you can finish your profile and apply now.",
+        )
+        return
+      }
+
+      // Legacy path: a background worker is still parsing. Poll until the job
+      // reaches a terminal status (the effect above advances the step).
     } catch (e: any) {
       setError(describeFetchError(e, "We could not upload your resume. Please try again."))
     } finally {

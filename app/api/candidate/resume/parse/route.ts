@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { uploadFileToSupabase } from "@/lib/supabase-storage-utils"
 import { getAuthedUser } from "@/lib/apiServerAuth"
 import { ingestResume } from "@/lib/resume-ingest"
+import { writeIngestToCandidate, finalizeParsingJob, getCandidateRow } from "@/lib/resume-upload"
 
 export const runtime = "nodejs"
 // Inline parse within the request (maxDuration = 60). When the Fly worker
@@ -181,65 +182,44 @@ export async function POST(request: NextRequest) {
       console.error("/api/candidate/resume/parse inline parse error", { parseError })
     }
 
-    // Map the parse result to candidate fields
-    const fields: Record<string, unknown> = {}
-    if (parseResult) {
-      // Copy over whatever fields the ingest function extracted
-      if (parseResult.fields) {
-        Object.assign(fields, parseResult.fields)
-      }
-      if (parseResult.resumeText) {
-        fields.resume_text = parseResult.resumeText
-      }
-    }
+    // The file is already in storage at this point, so from here on NOTHING
+    // may fail the request. A write error is recorded and reported as a
+    // `needs_review` state — the candidate keeps their upload either way.
+    const write = await writeIngestToCandidate(
+      candidateId,
+      {
+        name: file.name,
+        type: file.type || null,
+        size: typeof file.size === "number" ? file.size : null,
+        url: fileUrl,
+      },
+      parseResult,
+      parseError,
+    )
 
-    // If we have parsed data, promote the candidate; otherwise flag for review
-    if (parseResult?.state === "needs_review" || !parseResult) {
-      // Resume could not be fully read — keep the file and flag for recruiter review
-      await supabaseAdmin
-        .from("candidates")
-        .update({
-          file_name: file.name,
-          file_url: fileUrl,
-          file_size: file.size,
-          file_type: file.type || "application/octet-stream",
-          resume_parse_state: "needs_review",
-          resume_parse_error: parseError || "Could not extract text from this resume",
-          uploaded_at: nowIso(),
-          updated_at: nowIso(),
-        })
-        .eq("id", candidateId)
-    } else {
-      // Successful parse — write extracted fields to the candidate row
-      const update: Record<string, unknown> = {
-        file_name: file.name,
-        file_url: fileUrl,
-        file_size: file.size,
-        file_type: file.type || "application/octet-stream",
-        resume_parse_state: "parsed",
-        resume_parse_error: null,
-        uploaded_at: nowIso(),
-        updated_at: nowIso(),
-      }
-      Object.assign(update, fields)
-      await supabaseAdmin
-        .from("candidates")
-        .update(update)
-        .eq("id", candidateId)
-    }
+    // Close the parsing job so the client's poll resolves instead of hanging.
+    const finalJob = await finalizeParsingJob(
+      String(parsingJob.id),
+      write.state,
+      write.error || parseError || parseResult?.error || null,
+    )
 
-    // Return the parsed state to the client
-    const response = {
-      candidate: await supabaseAdmin
-        .from("candidates")
-        .select("*")
-        .eq("id", candidateId)
-        .single(),
-      parseState: parseResult?.state || "needs_review",
-      parseError: parseError || null,
-    }
+    // Return the CANDIDATE ROW (not the raw Postgrest response). Returning the
+    // response wrapper made `candidate.file_url` undefined on the client, so
+    // the stepper still believed no resume had been uploaded.
+    const freshCandidate = await getCandidateRow(candidateId)
 
-    return NextResponse.json(response)
+    return NextResponse.json({
+      candidate: freshCandidate || updatedCandidate,
+      parsingJob:
+        finalJob || {
+          ...parsingJob,
+          status: write.state === "needs_review" ? "failed" : "completed",
+          error_message: write.error || parseError || null,
+        },
+      parseState: write.state,
+      parseError: write.error || parseError || parseResult?.error || null,
+    })
 
   } catch (e: any) {
     const message = typeof e?.message === "string" && e.message.trim() ? e.message.trim() : "Internal Server Error"

@@ -2199,7 +2199,20 @@ async function extractPDFText(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
     const data = await pdfParse(Buffer.from(arrayBuffer))
     const text = sanitizeExtractedText(data.text)
-    if (text && text.length >= 80 && !looksLikePdfStructure(text)) {
+    const usable = !!text && !looksLikePdfStructure(text)
+
+    //
+    // A real resume has thousands of characters. When pdf-parse returns only
+    // a couple of hundred, the PDF is image-based or draws its text as
+    // outlines (a scan, or a heavily designed CV). Accepting that thin text
+    // was the reason some resumes could never be parsed: the model was handed
+    // 200 characters, could not find a name, validation failed, and the
+    // candidate was told their resume could not be read. The vision model is
+    // the only thing that can read those files, so use it whenever the
+    // extracted text is implausibly short.
+    //
+    const MIN_USABLE_PDF_TEXT = 600
+    if (usable && text.length >= MIN_USABLE_PDF_TEXT) {
       return text
     }
 
@@ -2207,8 +2220,12 @@ async function extractPDFText(arrayBuffer: ArrayBuffer): Promise<string> {
       try {
         const ocrText = await extractPDFTextWithGemini(arrayBuffer)
         const out = sanitizeExtractedText(ocrText)
-        const base = looksLikePdfStructure(text) ? "" : text
-        return out.length > base.length ? out : base
+        const base = usable ? text : ""
+        if (out && out.length >= 80 && !looksLikePdfStructure(out)) {
+          return out.length > base.length ? out : base
+        }
+        // OCR gave us nothing new — keep whatever pdf-parse found.
+        return base
       } catch (e) {
         const status = getGeminiErrorStatus(e as any)
         const msg = String((e as any)?.message || e)
@@ -2216,7 +2233,7 @@ async function extractPDFText(arrayBuffer: ArrayBuffer): Promise<string> {
       }
     }
 
-    return looksLikePdfStructure(text) ? "" : text
+    return usable ? text : ""
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
     console.warn(`PDF extraction warning with pdf-parse: ${msg}`)

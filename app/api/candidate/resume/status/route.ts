@@ -261,7 +261,7 @@ export async function GET(request: NextRequest) {
     if (canClaim) {
       await supabaseAdmin
         .from("parsing_jobs")
-        .update({ status: "processing", updated_at: nowIso() })
+        .update({ status: "processing", started_at: nowIso() })
         .eq("id", id)
         .eq("candidate_id", candidate.id)
       if (queueRow?.id) {
@@ -275,7 +275,7 @@ export async function GET(request: NextRequest) {
         await runFallbackParsing(job, String(candidate.id))
         await supabaseAdmin
           .from("parsing_jobs")
-          .update({ status: "completed", parsing_method: "api_fallback", completed_at: nowIso(), updated_at: nowIso() })
+          .update({ status: "completed", parsing_method: "api_fallback", completed_at: nowIso() })
           .eq("id", id)
           .eq("candidate_id", candidate.id)
         if (queueRow?.id) {
@@ -289,7 +289,7 @@ export async function GET(request: NextRequest) {
         Sentry.captureException(e, { tags: { parsing_job_id: id, candidate_id: String(candidate.id) } })
         await supabaseAdmin
           .from("parsing_jobs")
-          .update({ status: "failed", completed_at: nowIso(), updated_at: nowIso() })
+          .update({ status: "failed", completed_at: nowIso(), error_message: msg })
           .eq("id", id)
           .eq("candidate_id", candidate.id)
         if (queueRow?.id) {
