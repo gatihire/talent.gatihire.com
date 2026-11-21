@@ -3,10 +3,12 @@ import * as Sentry from "@sentry/nextjs"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { uploadFileToSupabase } from "@/lib/supabase-storage-utils"
 import { getAuthedUser } from "@/lib/apiServerAuth"
+import { ingestResume } from "@/lib/resume-ingest"
 
 export const runtime = "nodejs"
-// Uploading + queueing is fast. Parsing happens in the worker, never in this
-// request, so this is only a ceiling for a slow 12MB upload.
+// Inline parse within the request (maxDuration = 60). When the Fly worker
+// board-worker is not running, this route handles the full parse so candidates
+// aren't left with a "queued" job that never completes.
 export const maxDuration = 60
 
 function nowIso() {
@@ -160,43 +162,84 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Failed to create parsing job: ${pErr?.message || "Unknown error"}`, stage }, { status: 500 })
     }
 
-    stage = "enqueue"
+    stage = "parse_resume"
     //
-    // Hand the parse to the background worker and return immediately.
+    // Parse the resume inline instead of enqueuing to the Fly worker.
+    // The worker is optional — when it's not running, this route handles
+    // the full parse within the serverless function (maxDuration = 60s).
+    // On Vercel Pro the 10‑minute limit is generous; on Hobby the 60‑second
+    // cap is enough because the Gemini model fixes (retired gemini-2.0-flash)
+    // and the raw‑text fallback keep parsing fast for most resumes.
     //
-    // Parsing a resume means OCR + one or more LLM calls and routinely takes
-    // 10–60 seconds. Doing it inline is what produced the "Failed to fetch"
-    // candidates were reporting: the serverless function hit its wall-clock
-    // limit and the connection was cut before a response was written, so the
-    // browser surfaced a bare network error even though the file had already
-    // been uploaded. The file is safely in storage at this point; the worker
-    // (or the status endpoint's fallback parser) finishes the job.
-    const { error: queueErr } = await supabaseAdmin.from("resume_parse_jobs").insert({
-      candidate_id: candidateId,
-      parsing_job_id: parsingJob.id,
-      file_id: fileRow.id,
-      file_path: path,
-      status: "queued",
-      attempts: 0,
-      next_run_at: nowIso(),
-      created_at: nowIso(),
-      updated_at: nowIso(),
-    })
+    let parseResult: any = null
+    let parseError: string | null = null
 
-    if (queueErr) {
-      // Do not fail the upload: the resume is stored and the status endpoint's
-      // fallback parser claims any parsing_job that has no active queue row.
-      console.error("/api/candidate/resume/parse enqueue failed", { message: queueErr.message })
-      Sentry.captureException(queueErr, { tags: { stage: "enqueue", candidate_id: candidateId } })
+    try {
+      parseResult = await ingestResume(file)
+    } catch (e: any) {
+      parseError = e?.message || "Resume parsing failed"
+      console.error("/api/candidate/resume/parse inline parse error", { parseError })
     }
 
-    return NextResponse.json({
-      candidate: updatedCandidate,
-      parsingJob,
-      // The client polls /api/candidate/resume/status until this job finishes.
-      parseState: "queued",
-      parseError: null,
-    })
+    // Map the parse result to candidate fields
+    const fields: Record<string, unknown> = {}
+    if (parseResult) {
+      // Copy over whatever fields the ingest function extracted
+      if (parseResult.fields) {
+        Object.assign(fields, parseResult.fields)
+      }
+      if (parseResult.resumeText) {
+        fields.resume_text = parseResult.resumeText
+      }
+    }
+
+    // If we have parsed data, promote the candidate; otherwise flag for review
+    if (parseResult?.state === "needs_review" || !parseResult) {
+      // Resume could not be fully read — keep the file and flag for recruiter review
+      await supabaseAdmin
+        .from("candidates")
+        .update({
+          file_name: file.name,
+          file_url: fileUrl,
+          file_size: file.size,
+          file_type: file.type || "application/octet-stream",
+          resume_parse_state: "needs_review",
+          resume_parse_error: parseError || "Could not extract text from this resume",
+          uploaded_at: nowIso(),
+          updated_at: nowIso(),
+        })
+        .eq("id", candidateId)
+    } else {
+      // Successful parse — write extracted fields to the candidate row
+      const update: Record<string, unknown> = {
+        file_name: file.name,
+        file_url: fileUrl,
+        file_size: file.size,
+        file_type: file.type || "application/octet-stream",
+        resume_parse_state: "parsed",
+        resume_parse_error: null,
+        uploaded_at: nowIso(),
+        updated_at: nowIso(),
+      }
+      Object.assign(update, fields)
+      await supabaseAdmin
+        .from("candidates")
+        .update(update)
+        .eq("id", candidateId)
+    }
+
+    // Return the parsed state to the client
+    const response = {
+      candidate: await supabaseAdmin
+        .from("candidates")
+        .select("*")
+        .eq("id", candidateId)
+        .single(),
+      parseState: parseResult?.state || "needs_review",
+      parseError: parseError || null,
+    }
+
+    return NextResponse.json(response)
 
   } catch (e: any) {
     const message = typeof e?.message === "string" && e.message.trim() ? e.message.trim() : "Internal Server Error"
